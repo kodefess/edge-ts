@@ -52,7 +52,7 @@ export async function runBrowserTasks(
         `  ✓ ${String(completed).padStart(2, "0")}/${maxTasks} ${keyword}`,
       );
 
-      await sleep(randomDelay(2, 5) * 1000);
+      await sleep(5_000);
 
       await driver.get(SEARCH_URL);
     } catch (error) {

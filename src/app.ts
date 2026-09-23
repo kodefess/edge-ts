@@ -1,14 +1,9 @@
-import { randomDelay, sleep } from "./utils/delay.js";
-
-import { console } from "./utils/console.js";
-
-import { closeRunningEdge } from "./utils/process.js";
-
-import { createDriver } from "./driver/edge.js";
-
-import { runBrowserTasks } from "./search/engine.js";
-
-import { PROFILES, SEARCHES_PER_PROFILE } from "./config/settings.js";
+import { randomDelay, sleep } from "./utils/delay";
+import { console } from "./utils/console";
+import { closeRunningEdge } from "./utils/process";
+import { createDriver } from "./driver/edge";
+import { runBrowserTasks } from "./search/engine";
+import { PROFILES, SEARCHES_PER_PROFILE } from "./config/settings";
 
 async function main(): Promise<void> {
   const totalProfiles = PROFILES.length;
@@ -22,7 +17,6 @@ async function main(): Promise<void> {
   console.print();
 
   console.dim(`profiles  ${totalProfiles}`);
-
   console.dim(`target    ${SEARCHES_PER_PROFILE} tasks/profile`);
 
   console.print();
@@ -78,7 +72,9 @@ async function main(): Promise<void> {
   console.dim(`  tasks completed     ${totalTasks}`);
 
   console.dim(
-    `  average / profile   ${(totalTasks / totalProfiles).toFixed(1)}`,
+    `  average / profile   ${
+      totalProfiles > 0 ? (totalTasks / totalProfiles).toFixed(1) : "0.0"
+    }`,
   );
 
   console.print();

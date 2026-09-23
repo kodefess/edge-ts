@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { KEYWORDS_FILE } from "../config/settings.js";
+import { KEYWORDS_FILE } from "../config/settings";
 
 export function loadKeywords(): string[] {
   if (!fs.existsSync(KEYWORDS_FILE)) {

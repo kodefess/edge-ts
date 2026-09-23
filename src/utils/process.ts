@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 
 import { promisify } from "node:util";
 
-import { sleep } from "./delay.js";
+import { sleep } from "./delay";
 
 const execFileAsync = promisify(execFile);
 

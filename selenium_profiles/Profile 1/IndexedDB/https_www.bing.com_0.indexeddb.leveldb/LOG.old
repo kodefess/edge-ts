@@ -1,3 +1,0 @@
-2026/09/23-08:06:20.320 798 Creating DB D:\Development\kodefess\edge-ts\selenium_profiles\Profile 1\IndexedDB\https_www.bing.com_0.indexeddb.leveldb since it was missing.
-2026/09/23-08:06:20.333 798 Reusing MANIFEST D:\Development\kodefess\edge-ts\selenium_profiles\Profile 1\IndexedDB\https_www.bing.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/09/23-08:06:30.123 490 Manual compaction at level-0 from '\x00\x01\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x02\x00\x00\x00' @ 0 : 0; will stop at (end)

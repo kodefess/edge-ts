@@ -1,4 +1,0 @@
-2026/09/23-08:06:33.827 798 Reusing MANIFEST D:\Development\kodefess\edge-ts\selenium_profiles\Profile 1\IndexedDB\https_www.bing.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/09/23-08:06:33.828 798 Recovering log #3
-2026/09/23-08:06:33.828 798 Reusing old log D:\Development\kodefess\edge-ts\selenium_profiles\Profile 1\IndexedDB\https_www.bing.com_0.indexeddb.leveldb/000003.log 
-2026/09/23-08:06:35.598 4328 Manual compaction at level-0 from '\x00\x02\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x03\x00\x00\x00' @ 0 : 0; will stop at (end)

@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const SRC_DIR = path.resolve(import.meta.dirname, "..");
-
 export const PROJECT_ROOT = path.resolve(SRC_DIR, "..");
 
 function getEnv(name: string): string | undefined {
@@ -17,7 +16,7 @@ function getEnv(name: string): string | undefined {
   return value.trim();
 }
 
-function resolveProjectPath(value: string | undefined): string | undefined {
+function resolvePath(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -29,15 +28,13 @@ function resolveProjectPath(value: string | undefined): string | undefined {
   return path.resolve(PROJECT_ROOT, value);
 }
 
-export const EDGE_DRIVER_PATH = resolveProjectPath(getEnv("EDGE_DRIVER_PATH"));
+export const EDGE_DRIVER_PATH = resolvePath(getEnv("EDGE_DRIVER_PATH"));
 
-export const SEARCH_URL = getEnv("SEARCH_URL") ?? "https://www.bing.com";
-
-export const ORIGINAL_USER_DATA_DIR = getEnv("ORIGINAL_USER_DATA_DIR");
-
-export const SELENIUM_USER_DATA_DIR = resolveProjectPath(
+export const SELENIUM_USER_DATA_DIR = resolvePath(
   getEnv("SELENIUM_USER_DATA_DIR"),
 );
+
+export const SEARCH_URL = getEnv("SEARCH_URL") ?? "https://www.bing.com";
 
 export const PROFILES = (getEnv("PROFILES") ?? "")
   .split(",")
@@ -56,10 +53,6 @@ if (!EDGE_DRIVER_PATH) {
   missingConfig.push("EDGE_DRIVER_PATH");
 }
 
-if (!ORIGINAL_USER_DATA_DIR) {
-  missingConfig.push("ORIGINAL_USER_DATA_DIR");
-}
-
 if (!SELENIUM_USER_DATA_DIR) {
   missingConfig.push("SELENIUM_USER_DATA_DIR");
 }
@@ -76,9 +69,9 @@ if (!EDGE_DRIVER_PATH || !fs.existsSync(EDGE_DRIVER_PATH)) {
   throw new Error(`EdgeDriver not found:\n${EDGE_DRIVER_PATH}`);
 }
 
-if (!ORIGINAL_USER_DATA_DIR || !fs.existsSync(ORIGINAL_USER_DATA_DIR)) {
+if (!SELENIUM_USER_DATA_DIR || !fs.existsSync(SELENIUM_USER_DATA_DIR)) {
   throw new Error(
-    `Original Edge User Data directory not found:\n${ORIGINAL_USER_DATA_DIR}`,
+    `Edge User Data directory not found:\n${SELENIUM_USER_DATA_DIR}`,
   );
 }
 

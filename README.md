@@ -6,7 +6,7 @@
 [![Selenium](https://img.shields.io/badge/Selenium-WebDriver-43B02A?logo=selenium&logoColor=white)](https://www.selenium.dev/)
 [![Microsoft Edge](https://img.shields.io/badge/Microsoft-Edge-0078D7?logo=microsoftedge&logoColor=white)](https://www.microsoft.com/edge)
 
-Simple browser automation using **TypeScript**, **Selenium WebDriver**, and **Microsoft Edge**.
+Simple browser automation using **TypeScript** and **Selenium WebDriver**.
 
 Supports automation with existing Edge profiles and multiple profiles through environment-based configuration.
 
@@ -61,8 +61,6 @@ just run
 
 ## License
 
-This project is licensed under the **WTF Public License**.
+This project is licensed under the **WTFPL license**.
 
 ---
-
-Made with TypeScript.

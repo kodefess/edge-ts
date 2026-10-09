@@ -1,11 +1,7 @@
 import { By, until, type WebDriver } from "selenium-webdriver";
-
 import { SEARCH_URL } from "../config/settings.js";
-
-import { humanTyping, randomDelay, sleep } from "../utils/delay.js";
-
+import { humanTyping, sleep } from "../utils/delay.js";
 import { loadKeywords } from "../utils/keywords.js";
-
 import { console } from "../utils/console.js";
 
 const KEYWORDS = loadKeywords();

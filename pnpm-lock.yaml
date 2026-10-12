@@ -15,12 +15,12 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1
       selenium-webdriver:
-        specifier: ^4.50.0
-        version: 4.50.0
+        specifier: ^4.51.0
+        version: 4.51.0
     devDependencies:
       '@types/node':
-        specifier: ^24.19.1
-        version: 24.19.1
+        specifier: ^24.19.2
+        version: 24.19.2
       '@types/selenium-webdriver':
         specifier: ^4.35.7
         version: 4.35.7
@@ -192,8 +192,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@types/node@24.19.1':
-    resolution: {integrity: sha512-aS3/DG0oM05K0RIXXP+hKjinGG5IgSSVGzswZxW3O0sS3pH4/fycXundUC9XsszgKCk4gHXylTEK6hyFxVxnoQ==}
+  '@types/node@24.19.2':
+    resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
   '@types/selenium-webdriver@4.35.7':
     resolution: {integrity: sha512-TVduvRhQrIdjPWEC6YJLxwZWegWLD3uDOsqMuWk2U9+TiXw6wAH9RlKEtuHO8kioZkJ5MWGC9pQDY0nXvgi0nA==}
@@ -248,8 +248,8 @@ packages:
   safe-buffer@5.1.2:
     resolution: {integrity: sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==}
 
-  selenium-webdriver@4.50.0:
-    resolution: {integrity: sha512-E8DhBVMpnsNwShcxSWG8oCVJLQoPZiEciqz/inH7YkKvnR/kBiSNjaJux+7iuA4x6/77N8T68vWMTJgW169kOg==}
+  selenium-webdriver@4.51.0:
+    resolution: {integrity: sha512-2FY/x+THHk9uWj+WLBib0r+53D1G0pidox796H5AfbRHhJdPc7CVQPNJi31ip1Tb9duBYRw0zX0wJovnbwSDHg==}
     engines: {node: '>= 22.0.0'}
 
   setimmediate@1.0.5:
@@ -372,18 +372,18 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@types/node@24.19.1':
+  '@types/node@24.19.2':
     dependencies:
       undici-types: 7.24.6
 
   '@types/selenium-webdriver@4.35.7':
     dependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
       '@types/ws': 8.18.2
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
   core-util-is@1.0.3: {}
 
@@ -456,7 +456,7 @@ snapshots:
 
   safe-buffer@5.1.2: {}
 
-  selenium-webdriver@4.50.0:
+  selenium-webdriver@4.51.0:
     dependencies:
       '@bazel/runfiles': 6.5.0
       jszip: 3.10.2

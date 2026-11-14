@@ -16,10 +16,14 @@ setup:
     if [ ! -f .env ]; then cp .env.example .env; echo "Created .env - fill it in before running."; else echo ".env already exists, left unchanged."; fi
     pnpm build
 
+# run/keyword call tsx through node directly, so they keep working even when
+# the global `pnpm` command is broken (it only needs node_modules installed).
+tsx := "node node_modules/tsx/dist/cli.mjs"
+
 # Start now, or at a set time: `just run 10:00`
 run at="":
-    pnpm dev {{at}}
+    {{tsx}} src/app.ts {{at}}
 
 # Generate N natural search keywords into src/data/keywords.txt: `just keyword 500`
 keyword count="500":
-    pnpm keywords {{count}}
+    {{tsx}} src/scripts/generate-keywords.ts {{count}}

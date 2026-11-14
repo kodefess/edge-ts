@@ -11,8 +11,11 @@ export async function createDriver(profileName: string): Promise<WebDriver> {
 
   const options = new edge.Options();
 
+  // Hides the "being controlled by automated test software" infobar.
+  // (--disable-infobars no longer works on modern Chromium.)
+  options.excludeSwitches("enable-automation");
+
   options.addArguments(
-    "--disable-infobars",
     `--user-data-dir=${SELENIUM_USER_DATA_DIR}`,
     `--profile-directory=${profileName}`,
     "--start-maximized",

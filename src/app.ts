@@ -5,7 +5,7 @@ import { closeRunningEdge } from "./utils/process";
 import { createDriver } from "./driver/edge";
 import { runBrowserTasks, type TaskFailure } from "./search/engine";
 import { parseStartTime, waitUntil } from "./utils/schedule";
-import { pauseLine, profileFooter, profileHeader } from "./utils/ui";
+import { banner, pauseLine, profileFooter, profileHeader, sessionInfo } from "./utils/ui";
 import { PROFILES, RUN_AT, SEARCHES_PER_PROFILE } from "./config/settings";
 
 interface ProfileReport {
@@ -146,11 +146,8 @@ async function main(): Promise<void> {
   // Parse before printing anything so a typo fails immediately, not at 10:00.
   const startAt = RUN_AT ? parseStartTime(RUN_AT) : undefined;
 
-  console.print();
-  console.print(pc.bold("Automated Browser · Selenium / Edge"));
-  console.print();
-  console.dim(`  profiles   ${totalProfiles}  (${PROFILES.join(", ")})`);
-  console.dim(`  target     ${SEARCHES_PER_PROFILE} tugas/profile`);
+  banner();
+  sessionInfo(PROFILES, SEARCHES_PER_PROFILE);
 
   if (startAt) {
     await waitUntil(startAt);

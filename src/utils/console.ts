@@ -43,10 +43,16 @@ export const console = {
 
 export function formatDuration(milliseconds: number): string {
   const totalSeconds = Math.round(milliseconds / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
 
-  return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+  if (hours > 0) {
+    return `${hours}h${pad(minutes)}m${pad(seconds)}s`;
+  }
+
+  return minutes > 0 ? `${minutes}m${pad(seconds)}s` : `${seconds}s`;
 }
 
 export function formatError(error: unknown): string {

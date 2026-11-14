@@ -4,7 +4,9 @@ import { console, formatDuration, formatError } from "./utils/console";
 import { closeRunningEdge } from "./utils/process";
 import { createDriver } from "./driver/edge";
 import { runBrowserTasks, type TaskFailure } from "./search/engine";
-import { PROFILES, SEARCHES_PER_PROFILE } from "./config/settings";
+import { parseStartTime, waitUntil } from "./utils/schedule";
+import { pauseLine, profileFooter, profileHeader } from "./utils/ui";
+import { PROFILES, RUN_AT, SEARCHES_PER_PROFILE } from "./config/settings";
 
 interface ProfileReport {
   index: number;
@@ -29,14 +31,9 @@ async function runProfile(
   total: number,
 ): Promise<ProfileReport> {
   const position = `${index + 1}/${total}`;
-  const tag = `[${name}]`;
   const startedAt = Date.now();
 
-  console.print();
-  console.rule(`profile ${position}`);
-  console.print(
-    `${pc.cyan("▶")} ${pc.bold(name)} ${pc.cyan("· sedang mencari")} ${pc.dim(`(target ${SEARCHES_PER_PROFILE})`)}`,
-  );
+  profileHeader(name, position, SEARCHES_PER_PROFILE);
   console.setTitle(`edge-ts · ${position} · ${name} sedang mencari`);
 
   const report: ProfileReport = {
@@ -52,7 +49,7 @@ async function runProfile(
   try {
     driver = await createDriver(name);
 
-    const result = await runBrowserTasks(driver, SEARCHES_PER_PROFILE, tag);
+    const result = await runBrowserTasks(driver, SEARCHES_PER_PROFILE);
 
     report.completed = result.completed;
     report.failures = result.failures;
@@ -71,16 +68,16 @@ async function runProfile(
 
   report.durationMs = Date.now() - startedAt;
 
-  const counts = `${report.completed}/${SEARCHES_PER_PROFILE} ok · ${report.failures.length} gagal · ${formatDuration(report.durationMs)}`;
-
-  if (isPerfect(report)) {
-    console.print(`${pc.green("■")} ${pc.bold(name)} ${pc.green("selesai")} ${pc.dim(`· ${counts}`)}`);
-  } else if (report.error) {
-    console.print(`${pc.red("■")} ${pc.bold(name)} ${pc.red("error")} ${pc.dim(`· ${counts}`)}`);
-    console.dim(`  ${report.error}`);
-  } else {
-    console.print(`${pc.yellow("■")} ${pc.bold(name)} ${pc.yellow("tidak sempurna")} ${pc.dim(`· ${counts}`)}`);
-  }
+  profileFooter(
+    isPerfect(report) ? "ok" : report.error ? "error" : "partial",
+    {
+      completed: report.completed,
+      target: SEARCHES_PER_PROFILE,
+      failed: report.failures.length,
+      duration: formatDuration(report.durationMs),
+    },
+    report.error,
+  );
 
   return report;
 }
@@ -144,13 +141,22 @@ function printSummary(reports: ProfileReport[], totalMs: number): void {
 
 async function main(): Promise<void> {
   const totalProfiles = PROFILES.length;
-  const sessionStart = Date.now();
   const reports: ProfileReport[] = [];
+
+  // Parse before printing anything so a typo fails immediately, not at 10:00.
+  const startAt = RUN_AT ? parseStartTime(RUN_AT) : undefined;
 
   console.print();
   console.print(pc.bold("Automated Browser · Selenium / Edge"));
-  console.dim(`profiles  ${totalProfiles} (${PROFILES.join(", ")})`);
-  console.dim(`target    ${SEARCHES_PER_PROFILE} tugas/profile`);
+  console.print();
+  console.dim(`  profiles   ${totalProfiles}  (${PROFILES.join(", ")})`);
+  console.dim(`  target     ${SEARCHES_PER_PROFILE} tugas/profile`);
+
+  if (startAt) {
+    await waitUntil(startAt);
+  }
+
+  const sessionStart = Date.now();
 
   await closeRunningEdge();
 
@@ -167,7 +173,7 @@ async function main(): Promise<void> {
       const delay = randomDelay(10, 20);
 
       console.setTitle(`edge-ts · jeda sebelum profile ${index + 2}/${totalProfiles}`);
-      console.dim(`  … jeda ${Math.round(delay)}s sebelum profile berikutnya`);
+      pauseLine(Math.round(delay));
 
       await sleep(delay * 1000);
     }

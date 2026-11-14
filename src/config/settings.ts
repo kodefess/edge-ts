@@ -45,6 +45,12 @@ export const SEARCHES_PER_PROFILE = Number(
   getEnv("SEARCHES_PER_PROFILE") ?? "30",
 );
 
+/**
+ * Optional start time (HH:MM, 24 hours). The first CLI argument wins over the
+ * RUN_AT env variable, e.g. `just run 10:00`. Empty = start immediately.
+ */
+export const RUN_AT = process.argv[2]?.trim() || getEnv("RUN_AT");
+
 export const KEYWORDS_FILE = path.join(SRC_DIR, "data", "keywords.txt");
 
 const missingConfig: string[] = [];

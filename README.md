@@ -49,7 +49,7 @@ Run the setup:
 just setup
 ```
 
-This will install dependencies, create the WebDriver directory, create `.env.local`, and build the project.
+This will install dependencies, create the `driver/stable` folder, create `.env` from `.env.example` (an existing `.env` is left untouched), and build the project. Put `msedgedriver.exe` in `driver/stable` and fill in `.env` before running.
 
 ## Run
 
@@ -58,6 +58,14 @@ Start the development environment:
 ```bash
 just run
 ```
+
+Start at a set time instead (24-hour `HH:MM`). The script waits with a countdown and starts at that time; if the time has already passed today, it starts tomorrow:
+
+```bash
+just run 10:00
+```
+
+You can also set `RUN_AT=10:00` in `.env`; the argument to `just run` takes priority. Keep the terminal open and the PC awake until then.
 
 ## License
 

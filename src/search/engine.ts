@@ -1,9 +1,9 @@
-import pc from "picocolors";
 import { By, until, type WebDriver } from "selenium-webdriver";
 import { SEARCH_URL } from "../config/settings.js";
 import { humanTyping, sleep } from "../utils/delay.js";
 import { loadKeywords } from "../utils/keywords.js";
-import { console, formatError } from "../utils/console.js";
+import { formatError } from "../utils/console.js";
+import { taskFailure, taskSuccess } from "../utils/ui.js";
 
 const KEYWORDS = loadKeywords();
 
@@ -25,13 +25,11 @@ export interface TaskResult {
 export async function runBrowserTasks(
   driver: WebDriver,
   maxTasks: number,
-  profileTag: string,
 ): Promise<TaskResult> {
   await driver.get(SEARCH_URL);
 
   const failures: TaskFailure[] = [];
   const used = new Set<string>();
-  const width = String(maxTasks).length;
 
   let completed = 0;
 
@@ -51,7 +49,7 @@ export async function runBrowserTasks(
 
     used.add(keyword);
 
-    const counter = `${String(completed + 1).padStart(width, "0")}/${maxTasks}`;
+    const current = completed + 1;
 
     try {
       const searchBox = await driver.wait(
@@ -65,9 +63,7 @@ export async function runBrowserTasks(
 
       completed++;
 
-      console.print(
-        `  ${pc.dim(profileTag)} ${pc.green("✓")} ${pc.dim(counter)}  ${keyword}`,
-      );
+      taskSuccess(current, maxTasks, keyword);
 
       await sleep(5_000);
     } catch (error) {
@@ -75,9 +71,7 @@ export async function runBrowserTasks(
 
       failures.push({ keyword, reason });
 
-      console.print(
-        `  ${pc.dim(profileTag)} ${pc.red("✗")} ${pc.dim(counter)}  ${pc.red(keyword)} ${pc.dim(`· ${reason}`)}`,
-      );
+      taskFailure(current, maxTasks, keyword, reason);
     }
 
     try {
@@ -89,11 +83,11 @@ export async function runBrowserTasks(
   }
 
   if (failures.length >= MAX_FAILURES && completed < maxTasks) {
-    const aborted = `stopped after ${MAX_FAILURES} failed tasks`;
-
-    console.warning(`  ${profileTag} ! ${aborted}`);
-
-    return { completed, failures, aborted };
+    return {
+      completed,
+      failures,
+      aborted: `berhenti setelah ${MAX_FAILURES} tugas gagal`,
+    };
   }
 
   return { completed, failures };

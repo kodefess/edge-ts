@@ -19,3 +19,7 @@ setup:
 # Start now, or at a set time: `just run 10:00`
 run at="":
     pnpm dev {{at}}
+
+# Generate N natural search keywords into src/data/keywords.txt: `just keyword 500`
+keyword count="500":
+    pnpm keywords {{count}}

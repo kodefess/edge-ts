@@ -7,3 +7,4 @@ src/data/keywords.txt
 *.log
 .DS_Store
 Thumbs.db
+src/data/keywords.backup.txt

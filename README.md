@@ -67,6 +67,16 @@ just run 10:00
 
 You can also set `RUN_AT=10:00` in `.env`; the argument to `just run` takes priority. Keep the terminal open and the PC awake until then.
 
+## Keywords
+
+Fill `src/data/keywords.txt` with real search queries (default 500):
+
+```bash
+just keyword 500
+```
+
+Keywords are taken from search autocomplete (Google, falling back to Bing), so they are queries people actually type, and each run gives a different mix. Needs an internet connection and takes about 20 seconds for 500. Duplicates, non-English text, URLs and unsafe topics are filtered out. The previous file is kept as `src/data/keywords.backup.txt`; if nothing can be fetched, `keywords.txt` is left unchanged. Edit `STARTERS` and `TOPICS` in `src/scripts/generate-keywords.ts` to steer the topics.
+
 ## License
 
 This project is licensed under the **WTFPL license**.

@@ -11,9 +11,11 @@ export async function createDriver(profileName: string): Promise<WebDriver> {
 
   const options = new edge.Options();
 
-  // Hides the "being controlled by automated test software" infobar.
-  // (--disable-infobars no longer works on modern Chromium.)
-  options.excludeSwitches("enable-automation");
+  // enable-automation: hides the "being controlled by automated test software"
+  //   infobar (--disable-infobars no longer works on modern Chromium).
+  // enable-logging: stops Edge printing "DevTools listening on ws://..." to the
+  //   terminal on Windows.
+  options.excludeSwitches("enable-automation", "enable-logging");
 
   options.addArguments(
     `--user-data-dir=${SELENIUM_USER_DATA_DIR}`,

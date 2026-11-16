@@ -1,94 +1,225 @@
-import { By, until, type WebDriver } from "selenium-webdriver";
-import { SEARCH_URL } from "../config/settings.js";
-import { humanTyping, sleep } from "../utils/delay.js";
-import { loadKeywords } from "../utils/keywords.js";
-import { formatError } from "../utils/console.js";
-import { taskFailure, taskSuccess } from "../utils/ui.js";
+import { By, Key, until, type WebDriver } from "selenium-webdriver";
 
-const KEYWORDS = loadKeywords();
+import { MAX_CONSECUTIVE_FAILURES, REWARDS_ENABLED, SEARCH_URL } from "../config/settings";
+import { RewardResult, RewardsRunner } from "../rewards";
+import { humanTyping, sleep } from "../utils/delay";
+import { INTERRUPTED, InterruptedError, throwIfInterrupted } from "../utils/interrupt";
+import { loadKeywords } from "../utils/keywords";
+import * as ui from "../utils/ui";
 
-/** Stop retrying a profile after this many failed tasks. */
-const MAX_FAILURES = 5;
+export const KEYWORDS = loadKeywords();
 
-export interface TaskFailure {
+/** Seconds to wait after submitting a search before the next one (fixed, no extra pre-search delay). */
+const WAIT_AFTER_SEARCH = 5;
+
+export { INTERRUPTED };
+
+/** One failed search attempt, shown in the profile recap. */
+export interface SearchFailure {
+  attempt: number;
   keyword: string;
-  reason: string;
+  error: string;
 }
 
-export interface TaskResult {
-  completed: number;
-  failures: TaskFailure[];
-  /** Set when the profile stopped before reaching its target. */
-  aborted?: string;
+export type Outcome = "ok" | "partial" | "stopped" | "error" | "interrupted";
+
+/** Outcome of one profile's search run, used for the session recap. */
+export class ProfileResult {
+  searches = 0;
+  stoppedEarly = false;
+  error: string | undefined;
+  /** Seconds. */
+  duration = 0;
+  failures: SearchFailure[] = [];
+  reward: RewardResult | undefined;
+
+  constructor(
+    readonly profile: string,
+    readonly target: number,
+  ) {}
+
+  get failedSearches(): number {
+    return this.failures.length;
+  }
+
+  get isPerfect(): boolean {
+    return this.outcome === "ok";
+  }
+
+  /** ok · partial · stopped · error · interrupted */
+  get outcome(): Outcome {
+    if (this.error === INTERRUPTED) return "interrupted";
+    if (this.error) return "error";
+    if (this.stoppedEarly) return "stopped";
+    if (this.failures.length || this.searches < this.target) return "partial";
+    return "ok";
+  }
 }
 
-export async function runBrowserTasks(
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}`.trim() : String(error);
+}
+
+/**
+ * Run searches for a single Edge profile.
+ *
+ * Progress is written into `result` as it happens, so the caller still has
+ * partial numbers if this function throws.
+ */
+export async function runSearchesForProfile(
   driver: WebDriver,
-  maxTasks: number,
-): Promise<TaskResult> {
-  await driver.get(SEARCH_URL);
+  profileName: string,
+  maxSearches = 30,
+  result = new ProfileResult(profileName, maxSearches),
+): Promise<ProfileResult> {
+  let searchCount = 0;
+  let usedKeywords: string[] = [];
+  let consecutiveFailures = 0;
 
-  const failures: TaskFailure[] = [];
-  const used = new Set<string>();
+  const status = new ui.Activity();
 
-  let completed = 0;
+  const show = (activity: string, number?: number) => {
+    // Default to the search about to run, never past the target (otherwise
+    // the spinner reads "8/7" after the last search).
+    const current = number ?? Math.min(searchCount + 1, maxSearches);
 
-  while (completed < maxTasks && failures.length < MAX_FAILURES) {
-    let available = KEYWORDS.filter((keyword) => !used.has(keyword));
+    // Counter first, lined up with the "✓  2/7   keyword" rows, so it stays
+    // visible when a long keyword is cut off.
+    const width = String(maxSearches).length;
+    status.update(`[dim]${String(current).padStart(width)}/${maxSearches}[/dim]   ${activity}`);
+  };
 
-    if (available.length === 0) {
-      used.clear();
-      available = KEYWORDS;
+  status.start("[dim]membuka halaman pencarian[/dim]");
+
+  try {
+    await driver.get(SEARCH_URL);
+
+    // ----------------------------------------------------
+    // Bing Rewards, second tab
+    // ----------------------------------------------------
+
+    let rewards: RewardsRunner | undefined;
+
+    if (REWARDS_ENABLED) {
+      result.reward = new RewardResult();
+      rewards = await RewardsRunner.create(driver, result.reward, (markup) => show(markup));
+
+      show("[dim]membuka reward.bing.com…[/dim]");
+      await rewards.prepare();
+      throwIfInterrupted();
+
+      show("[dim]memulai pencarian[/dim]");
     }
 
-    const keyword = available[Math.floor(Math.random() * available.length)];
+    while (searchCount < maxSearches) {
+      throwIfInterrupted();
 
-    if (!keyword) {
-      break;
+      // ------------------------------------------------
+      // Get unused keywords
+      // ------------------------------------------------
+
+      let availableKeywords = KEYWORDS.filter((keyword) => !usedKeywords.includes(keyword));
+
+      // Reset keyword pool
+      if (availableKeywords.length === 0) {
+        usedKeywords = [];
+        availableKeywords = KEYWORDS;
+      }
+
+      const keyword = availableKeywords[Math.floor(Math.random() * availableKeywords.length)] as string;
+      usedKeywords.push(keyword);
+
+      const attemptNumber = searchCount + 1;
+
+      try {
+        // The rewards helper may have left another tab active.
+        if (rewards) {
+          await rewards.focusSearch();
+        }
+
+        // Replace the previous search's "memuat hasil" while the search box
+        // loads (can take up to 10 s).
+        show("[dim]menyiapkan pencarian[/dim]");
+
+        const searchBox = await driver.wait(until.elementLocated(By.name("q")), 10_000);
+
+        await searchBox.clear();
+
+        show(`[cyan]mengetik[/cyan] [white]${ui.escape(keyword)}[/white]`);
+
+        await humanTyping(searchBox, keyword);
+        throwIfInterrupted();
+
+        await searchBox.sendKeys(Key.ENTER);
+
+        searchCount++;
+        result.searches = searchCount;
+        consecutiveFailures = 0;
+
+        ui.searchOk(searchCount, maxSearches, keyword);
+
+        // Let the results load, then start over (a fixed wait, no scrolling).
+        // The search that just finished, not the next one.
+        show("[dim]memuat hasil[/dim]", searchCount);
+
+        // Points are claimed once, after all searches (finish).
+        await sleep(WAIT_AFTER_SEARCH * 1000);
+        throwIfInterrupted();
+
+        await driver.get(SEARCH_URL);
+      } catch (error) {
+        if (error instanceof InterruptedError) {
+          throw error;
+        }
+
+        consecutiveFailures++;
+
+        result.failures.push({ attempt: attemptNumber, keyword, error: errorName(error) });
+        ui.searchFailed(attemptNumber, maxSearches, keyword, errorName(error));
+
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          result.stoppedEarly = true;
+          ui.profileNote(`berhenti setelah ${consecutiveFailures} gagal berturut-turut`);
+          break;
+        }
+
+        // Otherwise the spinner keeps saying "mengetik ...".
+        show("[dim]kembali ke halaman pencarian[/dim]", attemptNumber);
+
+        try {
+          await driver.get(SEARCH_URL);
+        } catch {
+          // Ignore; the next attempt reports the problem.
+        }
+      }
     }
 
-    used.add(keyword);
+    // ----------------------------------------------------
+    // Profile completed
+    // ----------------------------------------------------
 
-    const current = completed + 1;
-
-    try {
-      const searchBox = await driver.wait(
-        until.elementLocated(By.name("q")),
-        10_000,
-      );
-
-      await searchBox.clear();
-      await humanTyping(searchBox, keyword);
-      await searchBox.sendKeys("");
-
-      completed++;
-
-      taskSuccess(current, maxTasks, keyword);
-
-      await sleep(5_000);
-    } catch (error) {
-      const reason = formatError(error);
-
-      failures.push({ keyword, reason });
-
-      taskFailure(current, maxTasks, keyword, reason);
+    if (rewards) {
+      await rewards.finish();
     }
 
-    try {
-      await driver.get(SEARCH_URL);
-    } catch (error) {
-      // Browser is unusable; keep what was done so far and stop this profile.
-      return { completed, failures, aborted: formatError(error) };
+    // The caller prints the per-profile recap line, since it also knows how
+    // long the profile took (including launching Edge).
+    return result;
+  } catch (error) {
+    // Re-throw so the main loop stops instead of moving on to the next
+    // profile after the user pressed Ctrl+C.
+    if (error instanceof InterruptedError) {
+      throw error;
     }
+
+    // Reported once, in the profile footer printed by the caller.
+    result.error = errorText(error);
+    return result;
+  } finally {
+    status.stop();
   }
-
-  if (failures.length >= MAX_FAILURES && completed < maxTasks) {
-    return {
-      completed,
-      failures,
-      aborted: `berhenti setelah ${MAX_FAILURES} tugas gagal`,
-    };
-  }
-
-  return { completed, failures };
 }

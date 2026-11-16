@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/app.js",
     "typecheck": "tsc --noEmit",
-    "keywords": "tsx src/scripts/generate-keywords.ts"
+    "keywords": "tsx src/scripts/generate-keywords.ts",
+    "update-driver": "tsx src/scripts/update-driver.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

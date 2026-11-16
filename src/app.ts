@@ -1,193 +1,334 @@
-import pc from "picocolors";
-import { randomDelay, sleep } from "./utils/delay";
-import { console, formatDuration, formatError } from "./utils/console";
-import { closeRunningEdge } from "./utils/process";
+import { parseArgs } from "node:util";
+
+import type { WebDriver } from "selenium-webdriver";
+
+import { CLOSE_EXISTING_EDGE, PROFILES, REWARDS_ENABLED, RUN_AT, SEARCHES_PER_PROFILE } from "./config/settings";
 import { createDriver } from "./driver/edge";
-import { runBrowserTasks, type TaskFailure } from "./search/engine";
-import { parseStartTime, waitUntil } from "./utils/schedule";
-import { banner, pauseLine, profileFooter, profileHeader, sessionInfo } from "./utils/ui";
-import { PROFILES, RUN_AT, SEARCHES_PER_PROFILE } from "./config/settings";
+import {
+  Schedule,
+  describeSchedule,
+  formatDatetime,
+  parseDatetime,
+  parseTimeOfDay,
+  promptSchedule,
+  scheduleFromEnv,
+  waitUntil,
+} from "./scheduler";
+import { INTERRUPTED, KEYWORDS, ProfileResult, runSearchesForProfile } from "./search/engine";
+import { console } from "./utils/console";
+import { sleep } from "./utils/delay";
+import { InterruptedError, installInterruptHandler, isInterrupted } from "./utils/interrupt";
+import { closeRunningEdge } from "./utils/process";
+import * as ui from "./utils/ui";
 
-interface ProfileReport {
-  index: number;
-  name: string;
-  completed: number;
-  failures: TaskFailure[];
-  error?: string;
-  durationMs: number;
+// ============================================================
+// SCHEDULE RESOLUTION
+// ============================================================
+
+const USAGE = `Run the automated search session immediately, once at a specific time, or every day at a fixed time.
+
+  --now              run the session immediately
+  --at DATETIME      run once at a date and time, for example "2026-11-12 13:00"
+  --daily HH:MM      run every day at a fixed time, for example "00:01"
+  --no-prompt        never ask interactively; fail if no schedule was provided
+
+A bare time (e.g. 10:00) is the same as --at 10:00.`;
+
+interface Args {
+  now: boolean;
+  at?: string;
+  daily?: string;
+  noPrompt: boolean;
 }
 
-function isPerfect(report: ProfileReport): boolean {
-  return (
-    !report.error &&
-    report.failures.length === 0 &&
-    report.completed >= SEARCHES_PER_PROFILE
+/** Parse the command line (port of argparse with a mutually exclusive group). */
+function parseArguments(): Args {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      now: { type: "boolean", default: false },
+      at: { type: "string" },
+      daily: { type: "string" },
+      "no-prompt": { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+  });
+
+  if (values.help) {
+    console.print(USAGE);
+    process.exit(0);
+  }
+
+  // edge-ts compatibility: `just run 10:00` → --at 10:00
+  const at = values.at ?? (positionals.join(" ").trim() || undefined);
+
+  const chosen = [values.now, at !== undefined, values.daily !== undefined].filter(Boolean).length;
+
+  if (chosen > 1) {
+    throw new Error("Use only one of --now, --at and --daily.");
+  }
+
+  return { now: values.now ?? false, at, daily: values.daily, noPrompt: values["no-prompt"] ?? false };
+}
+
+/** Resolve the schedule from CLI arguments, env vars, or a prompt. */
+async function resolveSchedule(args: Args): Promise<Schedule> {
+  if (args.now) return Schedule.now();
+  if (args.at) return new Schedule("once", parseDatetime(args.at));
+  if (args.daily) return new Schedule("daily", undefined, parseTimeOfDay(args.daily));
+
+  const envSchedule = scheduleFromEnv();
+
+  if (envSchedule) return envSchedule;
+
+  // Legacy edge-ts setting.
+  if (RUN_AT) return new Schedule("once", parseDatetime(RUN_AT));
+
+  if (args.noPrompt || !process.stdin.isTTY) {
+    throw new Error("No schedule provided. Use --now, --at, or --daily.");
+  }
+
+  return promptSchedule();
+}
+
+/** Reject a one-time schedule that is clearly in the past. */
+function validateSchedule(schedule: Schedule): void {
+  if (schedule.mode !== "once" || !schedule.runAt) {
+    return;
+  }
+
+  // Allow a small grace period so "--now" and starting the script a few
+  // seconds late still work.
+  if (schedule.runAt.getTime() < Date.now() - 60_000) {
+    throw new Error(
+      `Scheduled time is in the past: ${formatDatetime(schedule.runAt)}. Use --now to run immediately.`,
+    );
+  }
+}
+
+/** Wait for the schedule and run the session. */
+async function runScheduled(schedule: Schedule): Promise<number> {
+  ui.field("jadwal", describeSchedule(schedule));
+
+  for (;;) {
+    const target = schedule.nextRun();
+
+    if (target.getTime() > Date.now()) {
+      await waitUntil(target);
+
+      if (isInterrupted()) {
+        throw new InterruptedError();
+      }
+    }
+
+    const failedProfiles = await runSession();
+
+    if (schedule.mode === "once") {
+      // The recap already reports the outcome.
+      return failedProfiles;
+    }
+
+    console.markup("[dim]Mode harian aktif · menunggu jadwal berikutnya…[/dim]");
+    console.print();
+  }
+}
+
+// ============================================================
+// SESSION
+// ============================================================
+
+/** Driver of the profile that is running, so Ctrl+C can still close Edge. */
+let currentDriver: WebDriver | undefined;
+
+async function runSession(): Promise<number> {
+  const totalProfiles = PROFILES.length;
+  const results: ProfileResult[] = [];
+  let interrupted = false;
+
+  if (totalProfiles === 0) {
+    console.markup("[red]✗[/red] Tidak ada profile yang dikonfigurasi.");
+    return 1;
+  }
+
+  const sessionStartedAt = performance.now();
+
+  // --------------------------------------------------------
+  // Session overview
+  // --------------------------------------------------------
+
+  ui.section("sesi");
+  ui.field("profiles", `[bold white]${totalProfiles}[/bold white]`);
+  ui.profileGrid(PROFILES);
+  console.print();
+  ui.field(
+    "target",
+    `[bold white]${SEARCHES_PER_PROFILE}[/bold white] tugas/profile  ` +
+      `[dim](${SEARCHES_PER_PROFILE * totalProfiles} total)[/dim]`,
   );
-}
+  ui.field("keywords", `[bold white]${KEYWORDS.length}[/bold white]`);
 
-async function runProfile(
-  index: number,
-  name: string,
-  total: number,
-): Promise<ProfileReport> {
-  const position = `${index + 1}/${total}`;
-  const startedAt = Date.now();
+  if (REWARDS_ENABLED) {
+    ui.field(
+      "reward",
+      "[bold white]aktif[/bold white]  [dim]· tab kedua · daily · foto · perks · earn → search → klaim[/dim]",
+    );
+  }
 
-  profileHeader(name, position, SEARCHES_PER_PROFILE);
-  console.setTitle(`edge-ts · ${position} · ${name} sedang mencari`);
+  // --------------------------------------------------------
+  // Close existing Edge
+  // --------------------------------------------------------
 
-  const report: ProfileReport = {
-    index,
-    name,
-    completed: 0,
-    failures: [],
-    durationMs: 0,
-  };
+  if (CLOSE_EXISTING_EDGE) {
+    await closeRunningEdge();
+  }
 
-  let driver: Awaited<ReturnType<typeof createDriver>> | undefined;
+  // --------------------------------------------------------
+  // Process profiles
+  // --------------------------------------------------------
 
   try {
-    driver = await createDriver(name);
+    for (const [offset, profile] of PROFILES.entries()) {
+      const index = offset + 1;
+      const result = new ProfileResult(profile, SEARCHES_PER_PROFILE);
 
-    const result = await runBrowserTasks(driver, SEARCHES_PER_PROFILE);
+      // Register before running so an interrupted profile still appears in
+      // the recap.
+      results.push(result);
 
-    report.completed = result.completed;
-    report.failures = result.failures;
-    report.error = result.aborted;
+      await runProfile(result, index, totalProfiles);
+
+      // ------------------------------------------------
+      // Delay between profiles
+      // ------------------------------------------------
+
+      if (index < totalProfiles) {
+        const pause = 10 + Math.random() * 10;
+
+        ui.pause(pause);
+        await sleep(pause * 1000);
+
+        if (isInterrupted()) {
+          throw new InterruptedError();
+        }
+      }
+    }
   } catch (error) {
-    report.error = formatError(error);
+    if (!(error instanceof InterruptedError)) {
+      throw error;
+    }
+
+    // Still show what was done before Ctrl+C, then stop.
+    interrupted = true;
+  }
+
+  // --------------------------------------------------------
+  // Final Summary
+  // --------------------------------------------------------
+
+  const imperfect = ui.sessionRecap(
+    results,
+    totalProfiles,
+    (performance.now() - sessionStartedAt) / 1000,
+    interrupted,
+  );
+
+  if (interrupted) {
+    throw new InterruptedError();
+  }
+
+  return imperfect.length;
+}
+
+/** Run one profile, recording its outcome in `result`. */
+async function runProfile(result: ProfileResult, index: number, totalProfiles: number): Promise<ProfileResult> {
+  const profile = result.profile;
+
+  ui.profileHeader(profile, index, totalProfiles, SEARCHES_PER_PROFILE);
+  console.setTitle(`edge-ts · ${index}/${totalProfiles} · ${profile} sedang mencari`);
+
+  const startedAt = performance.now();
+  let driver: WebDriver | undefined;
+
+  try {
+    driver = await new ui.Activity("[dim]membuka Edge…[/dim]").run(() => createDriver(profile));
+    currentDriver = driver;
+
+    if (isInterrupted()) {
+      throw new InterruptedError();
+    }
+
+    await runSearchesForProfile(driver, profile, SEARCHES_PER_PROFILE, result);
+  } catch (error) {
+    if (error instanceof InterruptedError) {
+      result.error = INTERRUPTED;
+      throw error;
+    }
+
+    // Reported once, in the profile footer.
+    result.error = error instanceof Error ? `${error.name}: ${error.message}`.trim() : String(error);
   } finally {
+    result.duration = (performance.now() - startedAt) / 1000;
+
     if (driver) {
       try {
         await driver.quit();
       } catch {
-        // Browser may already be gone.
+        // Never let a cleanup failure hide the real error.
       }
     }
+
+    currentDriver = undefined;
+    ui.profileFooter(result);
   }
 
-  report.durationMs = Date.now() - startedAt;
-
-  profileFooter(
-    isPerfect(report) ? "ok" : report.error ? "error" : "partial",
-    {
-      completed: report.completed,
-      target: SEARCHES_PER_PROFILE,
-      failed: report.failures.length,
-      duration: formatDuration(report.durationMs),
-    },
-    report.error,
-  );
-
-  return report;
+  return result;
 }
 
-function printSummary(reports: ProfileReport[], totalMs: number): void {
-  const nameWidth = Math.max(7, ...reports.map((report) => report.name.length));
-  const totalCompleted = reports.reduce((sum, r) => sum + r.completed, 0);
-  const totalFailed = reports.reduce((sum, r) => sum + r.failures.length, 0);
-  const imperfect = reports.filter((report) => !isPerfect(report));
+// ============================================================
+// ENTRY POINT
+// ============================================================
 
-  console.print();
-  console.rule("rekap sesi");
-  console.print();
-  console.dim(
-    `  ${"#".padStart(2)}  ${"profile".padEnd(nameWidth)}  ${"ok".padStart(5)}  ${"gagal".padStart(5)}  ${"durasi".padStart(7)}  status`,
-  );
+async function main(): Promise<number> {
+  installInterruptHandler();
 
-  for (const report of reports) {
-    const status = isPerfect(report)
-      ? pc.green("✓ sempurna")
-      : report.error
-        ? pc.red("✗ error")
-        : pc.yellow("! tidak sempurna");
+  const args = parseArguments();
 
-    const failed = String(report.failures.length).padStart(5);
+  ui.banner();
 
-    console.print(
-      `  ${String(report.index + 1).padStart(2)}  ${report.name.padEnd(nameWidth)}  ${`${report.completed}/${SEARCHES_PER_PROFILE}`.padStart(5)}  ${report.failures.length > 0 ? pc.red(failed) : pc.dim(failed)}  ${pc.dim(formatDuration(report.durationMs).padStart(7))}  ${status}`,
-    );
-  }
+  const schedule = await resolveSchedule(args);
 
-  console.print();
-  console.dim(`  total tugas berhasil  ${totalCompleted}/${reports.length * SEARCHES_PER_PROFILE}`);
-  console.dim(`  total tugas gagal     ${totalFailed}`);
-  console.dim(`  durasi sesi           ${formatDuration(totalMs)}`);
+  validateSchedule(schedule);
 
-  console.print();
+  return runScheduled(schedule);
+}
 
-  if (imperfect.length === 0) {
-    console.success(`✓ Semua ${reports.length} profile selesai sempurna.`);
-    return;
-  }
+main()
+  .then((failedProfiles) => {
+    console.setTitle("edge-ts · selesai");
+    process.exitCode = failedProfiles;
+  })
+  .catch(async (error: unknown) => {
+    if (error instanceof InterruptedError) {
+      await currentDriver?.quit().catch(() => undefined);
 
-  console.warning(
-    `! ${imperfect.length} dari ${reports.length} profile tidak sempurna:`,
-  );
+      console.print();
+      console.markup("[yellow]‼[/yellow] Script dihentikan.");
+      process.exitCode = 130;
+      return;
+    }
 
-  for (const report of imperfect) {
     console.print();
-    console.print(`  ${pc.bold(report.name)} ${pc.dim(`(${report.completed}/${SEARCHES_PER_PROFILE} ok)`)}`);
 
-    if (report.error) {
-      console.print(`    ${pc.red("error:")} ${report.error}`);
+    if (error instanceof Error && error.name === "Error") {
+      // Configuration and schedule errors: one clear line.
+      console.markup(`[red]✗[/red] ${ui.escape(error.message)}`);
+      console.print();
+    } else {
+      console.markup(
+        `[red]✗[/red] Fatal error [dim]· ${error instanceof Error ? error.name : typeof error}[/dim]`,
+      );
+      console.markup(`[dim]  ${ui.escape(error instanceof Error ? error.message : String(error))}[/dim]`);
     }
 
-    for (const failure of report.failures) {
-      console.print(`    ${pc.red("✗")} ${failure.keyword} ${pc.dim(`· ${failure.reason}`)}`);
-    }
-  }
-}
-
-async function main(): Promise<void> {
-  const totalProfiles = PROFILES.length;
-  const reports: ProfileReport[] = [];
-
-  // Parse before printing anything so a typo fails immediately, not at 10:00.
-  const startAt = RUN_AT ? parseStartTime(RUN_AT) : undefined;
-
-  banner();
-  sessionInfo(PROFILES, SEARCHES_PER_PROFILE);
-
-  if (startAt) {
-    await waitUntil(startAt);
-  }
-
-  const sessionStart = Date.now();
-
-  await closeRunningEdge();
-
-  for (let index = 0; index < totalProfiles; index++) {
-    const profile = PROFILES[index];
-
-    if (!profile) {
-      continue;
-    }
-
-    reports.push(await runProfile(index, profile, totalProfiles));
-
-    if (index < totalProfiles - 1) {
-      const delay = randomDelay(10, 20);
-
-      console.setTitle(`edge-ts · jeda sebelum profile ${index + 2}/${totalProfiles}`);
-      pauseLine(Math.round(delay));
-
-      await sleep(delay * 1000);
-    }
-  }
-
-  console.setTitle("edge-ts · selesai");
-
-  printSummary(reports, Date.now() - sessionStart);
-
-  if (reports.some((report) => !isPerfect(report))) {
     process.exitCode = 1;
-  }
-}
-
-main().catch((error: unknown) => {
-  console.print();
-  console.error(`✗ Fatal error · ${formatError(error)}`);
-
-  process.exitCode = 1;
-});
+  });

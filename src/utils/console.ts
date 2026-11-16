@@ -2,9 +2,96 @@ import pc from "picocolors";
 
 const RULE_WIDTH = 56;
 
+// ── rich-style markup ────────────────────────────────────────────────────────
+//
+// Lets ported code keep edge-py's strings as-is: "[dim]x[/dim]",
+// "[bold white]x[/bold white]", "[red]✗[/red]". A closing tag ("[/x]" or "[/]")
+// ends the most recent open style. "\[" is a literal bracket.
+
+type Style = (text: string) => string;
+
+const STYLES: Record<string, Style> = {
+  bold: pc.bold,
+  dim: pc.dim,
+  italic: pc.italic,
+  underline: pc.underline,
+  red: pc.red,
+  green: pc.green,
+  yellow: pc.yellow,
+  blue: pc.blue,
+  magenta: pc.magenta,
+  cyan: pc.cyan,
+  white: pc.white,
+  grey: pc.gray,
+  gray: pc.gray,
+};
+
+const TAG = /\\\[|\[(\/?)([a-z ]*)\]/g;
+
+/** Converts rich-style markup to ANSI colours (or plain text when colours are off). */
+export function renderMarkup(text: string): string {
+  const stack: Style[][] = [];
+  let output = "";
+  let last = 0;
+
+  const styled = (chunk: string) =>
+    stack.flat().reduceRight((value, style) => style(value), chunk);
+
+  for (const match of text.matchAll(TAG)) {
+    const [whole, closing, name = ""] = match;
+    const index = match.index ?? 0;
+
+    if (whole === "\\[") {
+      output += styled(text.slice(last, index)) ;
+      output += styled("[");
+      last = index + whole.length;
+      continue;
+    }
+
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    const known = words.every((word) => word in STYLES);
+
+    // Not a style tag (e.g. "[1/3]"): leave it as literal text.
+    if (!closing && (!words.length || !known)) {
+      continue;
+    }
+
+    output += styled(text.slice(last, index));
+    last = index + whole.length;
+
+    if (closing) {
+      stack.pop();
+    } else {
+      stack.push(words.map((word) => STYLES[word] as Style));
+    }
+  }
+
+  return output + styled(text.slice(last));
+}
+
+/** Escapes text (keywords, errors, page text) so "[" is never read as markup. */
+export function escapeMarkup(text: string): string {
+  return text.replace(/\[/g, "\\[");
+}
+
+/** Visible length of a markup string (tags and escapes removed). */
+export function markupLength(text: string): number {
+  return stripAnsi(renderMarkup(text)).length;
+}
+
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 export const console = {
   print(message = "") {
     process.stdout.write(`${message}\n`);
+  },
+
+  /** Prints rich-style markup, e.g. console.markup("[dim]waiting…[/dim]"). */
+  markup(message = "") {
+    process.stdout.write(`${renderMarkup(message)}\n`);
   },
 
   title(message: string) {

@@ -222,6 +222,141 @@ export const REWARDS_PHOTO_DIR = rawPhotoDir
 /** Ignore tiny icons and thumbnails that image search may reject. */
 export const REWARDS_PHOTO_MIN_BYTES = envInt("REWARDS_PHOTO_MIN_BYTES", 4096, 1);
 
+/**
+ * PC search points: Bing pays this many points per search, up to the daily
+ * cap the Rewards page reports (90). The search count is cut to what is still
+ * missing, and topped up this many times when the cap is not reached.
+ */
+export const REWARDS_POINTS_PER_SEARCH = envInt("REWARDS_POINTS_PER_SEARCH", 3, 1);
+
+export const REWARDS_SEARCH_TOPUP_ROUNDS = envInt("REWARDS_SEARCH_TOPUP_ROUNDS", 2, 0);
+
+/** "Set as wallpaper" (+20) on /earn: seconds to wait for Image Creator, and attempts. */
+export const REWARDS_WALLPAPER_TIMEOUT = envInt("REWARDS_WALLPAPER_TIMEOUT", 120, 20);
+
+export const REWARDS_WALLPAPER_ATTEMPTS = envInt("REWARDS_WALLPAPER_ATTEMPTS", 3, 1);
+
+// ============================================================
+// MOBILE PASS
+// ============================================================
+
+function envChoice<T extends string>(name: string, choices: readonly T[], fallback: T): T {
+  const value = (getEnv(name) ?? fallback).toLowerCase();
+
+  if (!(choices as readonly string[]).includes(value)) {
+    throw new Error(`${name} must be one of: ${choices.join(", ")}, got: ${JSON.stringify(value)}`);
+  }
+
+  return value as T;
+}
+
+function envUrl(name: string, fallback: string): string {
+  const value = getEnv(name) ?? fallback;
+
+  if (!/^https?:\/\//.test(value)) {
+    throw new Error(`${name} must start with http:// or https://, got: ${JSON.stringify(value)}`);
+  }
+
+  return value;
+}
+
+/** off = desktop only, replace = whole session mobile, second_pass = desktop then mobile. */
+export const MOBILE_RUN_MODES = ["off", "replace", "second_pass"] as const;
+export const MOBILE_RUN_MODE = envChoice("MOBILE_RUN_MODE", MOBILE_RUN_MODES, "second_pass");
+
+/** "web" = Selenium + DevTools emulation; "appium" also reads news in the Bing app on a real phone. */
+export const MOBILE_BACKENDS = ["web", "appium"] as const;
+export const MOBILE_BACKEND = envChoice("MOBILE_BACKEND", MOBILE_BACKENDS, "web");
+
+/** Preset key from src/mobile/devices.ts. Validated when the pass starts. */
+export const MOBILE_DEVICE = (getEnv("MOBILE_DEVICE") ?? "pixel_7").toLowerCase();
+
+/** 0 means: use SEARCHES_PER_PROFILE. */
+export const MOBILE_SEARCHES_PER_PROFILE = envInt("MOBILE_SEARCHES_PER_PROFILE", 0, 0);
+
+export const MOBILE_LOCALE = getEnv("MOBILE_LOCALE") ?? "en-US";
+
+export const MOBILE_WINDOW_MODE = envChoice("MOBILE_WINDOW_MODE", EDGE_WINDOW_MODES, "offscreen");
+
+/** Abort the mobile pass when the page probe does not see a phone. */
+export const MOBILE_PROBE_STRICT = envBool("MOBILE_PROBE_STRICT", true);
+
+export const MOBILE_NEWS_ENABLED = envBool("MOBILE_NEWS_ENABLED", true);
+export const MOBILE_NEWS_MAX = envInt("MOBILE_NEWS_MAX", 3);
+export const MOBILE_NEWS_DWELL_MIN = envInt("MOBILE_NEWS_DWELL_MIN", 3);
+export const MOBILE_NEWS_DWELL_MAX = envInt("MOBILE_NEWS_DWELL_MAX", 3);
+
+if (MOBILE_NEWS_DWELL_MIN > MOBILE_NEWS_DWELL_MAX) {
+  throw new Error(
+    `MOBILE_NEWS_DWELL_MIN must be <= MOBILE_NEWS_DWELL_MAX, got: ${MOBILE_NEWS_DWELL_MIN} > ${MOBILE_NEWS_DWELL_MAX}`,
+  );
+}
+
+export const MOBILE_NEWS_SCROLL = envInt("MOBILE_NEWS_SCROLL", 1, 1);
+export const MOBILE_NEWS_FEED_URL = envUrl("MOBILE_NEWS_FEED_URL", "https://www.msn.com/en-us/news");
+
+// --- Bing app through Appium ---------------------------------
+
+export const MOBILE_APPIUM_SERVER = envUrl("MOBILE_APPIUM_SERVER", "http://127.0.0.1:4723");
+
+/** Serial from `adb devices`. Empty means "the only attached device". */
+export const MOBILE_APPIUM_UDID = getEnv("MOBILE_APPIUM_UDID") ?? "";
+export const MOBILE_APPIUM_DEVICE_NAME = getEnv("MOBILE_APPIUM_DEVICE_NAME") ?? "Android";
+export const MOBILE_APPIUM_PLATFORM_VERSION = getEnv("MOBILE_APPIUM_PLATFORM_VERSION") ?? "";
+export const MOBILE_APPIUM_APP_PACKAGE = getEnv("MOBILE_APPIUM_APP_PACKAGE") ?? "com.microsoft.bing";
+export const MOBILE_APPIUM_APP_ACTIVITY = getEnv("MOBILE_APPIUM_APP_ACTIVITY") ?? "";
+export const MOBILE_APPIUM_NO_RESET = envBool("MOBILE_APPIUM_NO_RESET", true);
+export const MOBILE_APPIUM_TIMEOUT = envInt("MOBILE_APPIUM_TIMEOUT", 30, 5);
+export const MOBILE_APPIUM_WAIT = envInt("MOBILE_APPIUM_WAIT", 25, 5);
+
+export const MOBILE_APP_NEWS_ENABLED = envBool("MOBILE_APP_NEWS_ENABLED", true);
+export const MOBILE_APP_NEWS_MAX = envInt("MOBILE_APP_NEWS_MAX", 10);
+export const MOBILE_APP_DWELL_MIN = envInt("MOBILE_APP_DWELL_MIN", 15);
+export const MOBILE_APP_DWELL_MAX = envInt("MOBILE_APP_DWELL_MAX", 30);
+
+if (MOBILE_APP_DWELL_MIN > MOBILE_APP_DWELL_MAX) {
+  throw new Error(
+    `MOBILE_APP_DWELL_MIN must be <= MOBILE_APP_DWELL_MAX, got: ${MOBILE_APP_DWELL_MIN} > ${MOBILE_APP_DWELL_MAX}`,
+  );
+}
+
+export const MOBILE_APP_MAX_SWIPES = envInt("MOBILE_APP_MAX_SWIPES", 12);
+
+/** Emails (lowercase), in order. Empty = every account in the app, active one first. */
+export const MOBILE_APP_ACCOUNTS: string[] = (getEnv("MOBILE_APP_ACCOUNTS") ?? "")
+  .split(",")
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
+
+export const MOBILE_APP_RESTORE_ACCOUNT = envBool("MOBILE_APP_RESTORE_ACCOUNT", true);
+export const MOBILE_APP_CHECKIN = envBool("MOBILE_APP_CHECKIN", true);
+export const MOBILE_APP_ACTIVITIES = envBool("MOBILE_APP_ACTIVITIES", true);
+export const MOBILE_APP_READ_ROUNDS = envInt("MOBILE_APP_READ_ROUNDS", 3);
+export const MOBILE_APP_CLOSE_TABS = envBool("MOBILE_APP_CLOSE_TABS", true);
+export const MOBILE_APP_RETRY = envInt("MOBILE_APP_RETRY", 1, 0);
+export const MOBILE_APP_SKIP_FULL = envBool("MOBILE_APP_SKIP_FULL", true);
+
+/** Last wireless adb address that worked (written by `just mobile wifi`). */
+export const MOBILE_ADB_WIFI = getEnv("MOBILE_ADB_WIFI") ?? "";
+export const MOBILE_ADB_WIFI_AUTO = envBool("MOBILE_ADB_WIFI_AUTO", true);
+export const MOBILE_APPIUM_AUTOSTART = envBool("MOBILE_APPIUM_AUTOSTART", true);
+
+// ============================================================
+// DESKTOP (Microsoft Rewards app for Windows)
+// ============================================================
+
+export const DESKTOP_PROFILES_DIR = resolveDirPath(
+  getEnv("DESKTOP_PROFILES_DIR") ??
+    path.join(process.env.LOCALAPPDATA || os.homedir(), "edge-ts", "desktop-profiles"),
+);
+
+export const DESKTOP_APP_PACKAGE = getEnv("DESKTOP_APP_PACKAGE") ?? "Microsoft.24183918CCDA_8wekyb3d8bbwe";
+export const DESKTOP_APP_ID = getEnv("DESKTOP_APP_ID") ?? "MicrosoftRewards";
+export const DESKTOP_APP_EXE = getEnv("DESKTOP_APP_EXE") ?? "microsoft-rewards-desktop.exe";
+
+/** offscreen: window kept outside the monitors during `desktop run`; visible: where the app opens it. */
+export const DESKTOP_WINDOW_MODE = envChoice("DESKTOP_WINDOW_MODE", ["offscreen", "visible"] as const, "offscreen");
+
 // ============================================================
 // SCHEDULE (optional, non-interactive)
 // ============================================================

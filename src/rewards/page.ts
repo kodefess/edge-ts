@@ -2132,3 +2132,164 @@ export async function closeTab(driver: WebDriver, handle: string): Promise<void>
     if (!isWebDriverError(e)) throw e;
   }
 }
+
+// ============================================================
+// PC search progress
+// ============================================================
+
+const SEARCH_PROGRESS_JS = String.raw`
+const done = arguments[arguments.length - 1];
+
+const sum = (list) => {
+    let have = 0;
+    let max = 0;
+
+    for (const item of list || []) {
+        const now = Number(item.pointProgress);
+        const cap = Number(item.pointProgressMax);
+
+        if (Number.isFinite(now)) have += now;
+        if (Number.isFinite(cap)) max += cap;
+    }
+
+    return max > 0 ? { done: have, total: max } : null;
+};
+
+fetch('/api/getuserinfo?type=1', { credentials: 'include' })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) => {
+        const counters =
+            (data && data.dashboard && data.dashboard.userStatus &&
+                data.dashboard.userStatus.counters) || {};
+
+        done({ source: 'api', pc: sum(counters.pcSearch) });
+    })
+    .catch(() => done(null));
+`;
+
+/**
+ * `[done, total]` PC search points (e.g. `[45, 90]`), or `null`.
+ *
+ * The Rewards API that feeds the dashboard is asked first, from the rewards
+ * tab so it carries the account's cookies. When it answers nothing, the
+ * dashboard's category cards are used: the search one is the card about
+ * searching with the largest total (the "Bing Search: 1/1" daily card is too
+ * small to be the 90-point counter).
+ */
+export async function readSearchProgress(
+  driver: WebDriver,
+  cards?: Card[],
+  timeout = 10,
+): Promise<[number, number] | null> {
+  let data: unknown = null;
+
+  try {
+    await driver.manage().setTimeouts({ script: timeout * 1000 });
+    data = await driver.executeAsyncScript(SEARCH_PROGRESS_JS);
+  } catch (e) {
+    if (!isWebDriverError(e)) throw e;
+  }
+
+  const pc = isPlainObject(data) ? (data as { pc?: { done?: number; total?: number } | null }).pc : null;
+
+  if (pc && pc.total) {
+    return [Math.trunc(pc.done || 0), Math.trunc(pc.total)];
+  }
+
+  let best: [number, number] | null = null;
+
+  for (const card of cards ?? (await scanCards(driver))) {
+    if (card.group !== "category") continue;
+
+    const name = `${card.label || ""} ${card.title || ""}`.toLowerCase();
+
+    if (!["search", "pencarian", "cari"].some((word) => name.includes(word))) continue;
+
+    if (["visual", "image", "photo", "gambar", "foto", "mobile", "seluler"].some((word) => name.includes(word))) {
+      continue;
+    }
+
+    const progress = (card.progress ?? {}) as { done?: number; total?: number };
+    const total = Math.trunc(progress.total || 0);
+
+    if (total >= 30 && (best === null || total > best[1])) {
+      best = [Math.trunc(progress.done || 0), total];
+    }
+  }
+
+  return best;
+}
+
+// ============================================================
+// "Set as wallpaper" (Image Creator)
+// ============================================================
+
+const WALLPAPER_JS = String.raw`
+const norm = (t) => (t || '').replace(/\s+/g, ' ').trim();
+
+const visible = (el) => {
+    try {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 2 && rect.height > 2 &&
+            style.display !== 'none' && style.visibility !== 'hidden';
+    } catch (e) {
+        return false;
+    }
+};
+
+// Image Creator puts parts of its UI in shadow roots; walk them too.
+const roots = [document];
+for (let i = 0; i < roots.length; i += 1) {
+    for (const el of roots[i].querySelectorAll('*')) {
+        if (el.shadowRoot) roots.push(el.shadowRoot);
+    }
+}
+
+const bodyText = norm(document.body ? document.body.innerText : '');
+const generating = /generating the image|sedang membuat gambar|creating your image/i.test(bodyText);
+
+for (const root of roots) {
+    for (const el of root.querySelectorAll('button, a, [role="button"]')) {
+        const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label'));
+
+        if (!/^set as wallpaper$|^jadikan wallpaper$|^atur sebagai wallpaper$/i.test(text)) {
+            continue;
+        }
+
+        if (!visible(el)) continue;
+
+        return { found: true, generating: generating, element: el };
+    }
+}
+
+return { found: false, generating: generating, element: null };
+`;
+
+export interface WallpaperButton {
+  found: boolean;
+  generating: boolean;
+  element: WebElement | null;
+}
+
+/** The Set as wallpaper button, whether the picture is still generating. */
+export async function findWallpaperButton(driver: WebDriver): Promise<WallpaperButton> {
+  let result: Record<string, unknown> = {};
+
+  try {
+    result = ((await driver.executeScript(WALLPAPER_JS)) as Record<string, unknown> | null) ?? {};
+  } catch (e) {
+    if (!isWebDriverError(e)) throw e;
+  }
+
+  return {
+    found: Boolean(result["found"]),
+    generating: Boolean(result["generating"]),
+    element: (result["element"] as WebElement | null) ?? null,
+  };
+}
+
+/** Scroll `element` into view and click it like a user would. */
+export async function clickElement(driver: WebDriver, element: WebElement): Promise<boolean> {
+  return nativeClick(driver, element);
+}

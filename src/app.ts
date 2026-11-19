@@ -2,8 +2,19 @@ import { parseArgs } from "node:util";
 
 import type { WebDriver } from "selenium-webdriver";
 
-import { CLOSE_EXISTING_EDGE, PROFILES, REWARDS_ENABLED, RUN_AT, SEARCHES_PER_PROFILE } from "./config/settings";
-import { createDriver } from "./driver/edge";
+import {
+  CLOSE_EXISTING_EDGE,
+  MOBILE_APP_NEWS_ENABLED,
+  MOBILE_APP_NEWS_MAX,
+  MOBILE_BACKEND,
+  MOBILE_RUN_MODE,
+  PROFILES,
+  REWARDS_ENABLED,
+  RUN_AT,
+  SEARCHES_PER_PROFILE,
+} from "./config/settings";
+import { createDriver, setWindowMode } from "./driver/edge";
+import { REDEEM_URL, openWindow, profileAccount, resolveProfile } from "./driver/manual";
 import {
   Schedule,
   describeSchedule,
@@ -30,6 +41,9 @@ const USAGE = `Run the automated search session immediately, once at a specific 
   --now              run the session immediately
   --at DATETIME      run once at a date and time, for example "2026-11-12 13:00"
   --daily HH:MM      run every day at a fixed time, for example "00:01"
+  --visible          show the Edge windows (maximized) for this run, whatever EDGE_WINDOW_MODE says
+  --preview [NAME…]  open the profiles in plain Edge windows at Rewards → Redeem and run no task
+                     (all of PROFILES, or the given profile names / emails)
   --no-prompt        never ask interactively; fail if no schedule was provided
 
 A bare time (e.g. 10:00) is the same as --at 10:00.`;
@@ -38,6 +52,9 @@ interface Args {
   now: boolean;
   at?: string;
   daily?: string;
+  visible: boolean;
+  /** Defined (possibly empty) when --preview was given. */
+  preview?: string[];
   noPrompt: boolean;
 }
 
@@ -49,6 +66,8 @@ function parseArguments(): Args {
       now: { type: "boolean", default: false },
       at: { type: "string" },
       daily: { type: "string" },
+      visible: { type: "boolean", default: false },
+      preview: { type: "boolean", default: false },
       "no-prompt": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -59,7 +78,11 @@ function parseArguments(): Args {
     process.exit(0);
   }
 
-  // edge-ts compatibility: `just run 10:00` → --at 10:00
+  if (values.preview) {
+    return { now: false, visible: values.visible ?? false, preview: positionals, noPrompt: true };
+  }
+
+  // edge-ts compatibility: `just web run 10:00` → --at 10:00
   const at = values.at ?? (positionals.join(" ").trim() || undefined);
 
   const chosen = [values.now, at !== undefined, values.daily !== undefined].filter(Boolean).length;
@@ -68,7 +91,13 @@ function parseArguments(): Args {
     throw new Error("Use only one of --now, --at and --daily.");
   }
 
-  return { now: values.now ?? false, at, daily: values.daily, noPrompt: values["no-prompt"] ?? false };
+  return {
+    now: values.now ?? false,
+    at,
+    daily: values.daily,
+    visible: values.visible ?? false,
+    noPrompt: values["no-prompt"] ?? false,
+  };
 }
 
 /** Resolve the schedule from CLI arguments, env vars, or a prompt. */
@@ -236,7 +265,50 @@ async function runSession(): Promise<number> {
     throw new InterruptedError();
   }
 
+  // --------------------------------------------------------
+  // Read to Earn on the phone, every Bing app account
+  // (prints its own blocks and "rekap mobile")
+  // --------------------------------------------------------
+
+  if (appNewsWanted()) {
+    await runAppNewsPass();
+  }
+
   return imperfect.length;
+}
+
+function appNewsWanted(): boolean {
+  return (
+    MOBILE_RUN_MODE !== "off" && MOBILE_BACKEND === "appium" && MOBILE_APP_NEWS_ENABLED && MOBILE_APP_NEWS_MAX > 0
+  );
+}
+
+/** Read to Earn on the attached phone. Never fails the session. */
+async function runAppNewsPass(): Promise<void> {
+  // Imported here so a missing phone setup never breaks the web run.
+  const { AppiumUnavailable } = await import("./mobile/appium");
+  const { runMobileSession } = await import("./mobile/session");
+
+  try {
+    const { interrupted } = await runMobileSession();
+
+    if (interrupted) {
+      throw new InterruptedError();
+    }
+  } catch (error) {
+    if (error instanceof InterruptedError) {
+      throw error;
+    }
+
+    if (error instanceof AppiumUnavailable) {
+      console.markup(`  [yellow]![/yellow] mobile dilewati · ${ui.escape(error.message)}`);
+      return;
+    }
+
+    console.markup(
+      `  [red]✗[/red] mobile · ${error instanceof Error ? error.name : "Error"}: ${ui.escape(error instanceof Error ? error.message : String(error))}`,
+    );
+  }
 }
 
 /** Run one profile, recording its outcome in `result`. */
@@ -288,12 +360,67 @@ async function runProfile(result: ProfileResult, index: number, totalProfiles: n
 // ENTRY POINT
 // ============================================================
 
+/**
+ * Open each profile copy in a plain Edge window; no task runs.
+ *
+ * For redeeming points by hand: the windows are normal Edge windows on the
+ * same signed-in copies the web run uses, without WebDriver.
+ */
+async function runPreview(targets: string[]): Promise<number> {
+  const profiles: string[] = [];
+
+  for (const target of targets.length ? targets : PROFILES) {
+    const profile = resolveProfile(target);
+
+    if (profile) {
+      profiles.push(profile);
+    } else {
+      console.markup(
+        `  [yellow]![/yellow] ${ui.escape(target)} bukan profile di PROFILES dan tidak cocok dengan email mana pun · dilewati`,
+      );
+    }
+  }
+
+  if (!profiles.length) {
+    console.markup("  [red]✗[/red] tidak ada profile untuk dibuka");
+    return 1;
+  }
+
+  ui.section("preview · tanpa tugas");
+
+  for (const [offset, profile] of profiles.entries()) {
+    const email = profileAccount(profile);
+    openWindow(profile, REDEEM_URL).unref();
+    console.markup(
+      `  [green]✓[/green] ${String(offset + 1).padStart(2)}. [bold white]${ui.escape(profile)}[/bold white]  [dim]${email ? ui.escape(email) : "-"}[/dim]`,
+    );
+    // Let Edge register each window before the next profile starts.
+    await sleep(1500);
+  }
+
+  console.print();
+  console.markup(
+    "  [dim]Jendela Edge biasa (bukan otomasi): tukar poin di halaman Redeem, lalu tutup jendelanya.[/dim]",
+  );
+  console.markup("  [dim]Jangan jalankan `just web run` sebelum jendela-jendela ini ditutup.[/dim]");
+  console.print();
+  return 0;
+}
+
 async function main(): Promise<number> {
   installInterruptHandler();
 
   const args = parseArguments();
 
   ui.banner();
+
+  if (args.preview !== undefined) {
+    return runPreview(args.preview);
+  }
+
+  if (args.visible) {
+    setWindowMode("maximized");
+  }
 
   const schedule = await resolveSchedule(args);
 

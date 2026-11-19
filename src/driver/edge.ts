@@ -5,6 +5,7 @@ import { Builder, type WebDriver } from "selenium-webdriver";
 import {
   EDGE_DRIVER_PATH,
   EDGE_WINDOW_MODE,
+  type EdgeWindowMode,
   PAGE_LOAD_TIMEOUT,
   SELENIUM_USER_DATA_DIR,
 } from "../config/settings";
@@ -16,6 +17,14 @@ import { ensureProfileCopied } from "./profile";
  */
 const OFFSCREEN_POSITION = "-32000,-32000";
 const OFFSCREEN_SIZE = "1366,900";
+
+/** EDGE_WINDOW_MODE from .env, unless a run asks otherwise (--visible). */
+let windowMode: EdgeWindowMode = EDGE_WINDOW_MODE;
+
+/** Override EDGE_WINDOW_MODE for this run (e.g. "maximized"). */
+export function setWindowMode(mode: EdgeWindowMode): void {
+  windowMode = mode;
+}
 
 /** Create Edge WebDriver using the specified profile. */
 export async function createDriver(profileName: string): Promise<WebDriver> {
@@ -38,9 +47,9 @@ export async function createDriver(profileName: string): Promise<WebDriver> {
 
   options.addArguments("--disable-blink-features=AutomationControlled");
 
-  if (EDGE_WINDOW_MODE === "offscreen") {
+  if (windowMode === "offscreen") {
     options.addArguments(`--window-position=${OFFSCREEN_POSITION}`, `--window-size=${OFFSCREEN_SIZE}`);
-  } else if (EDGE_WINDOW_MODE === "maximized") {
+  } else if (windowMode === "maximized") {
     options.addArguments("--start-maximized");
   }
   // "minimized" opens normally and is minimized once the driver is up; Edge
@@ -62,7 +71,7 @@ export async function createDriver(profileName: string): Promise<WebDriver> {
     .setEdgeOptions(options)
     .build();
 
-  if (EDGE_WINDOW_MODE === "minimized") {
+  if (windowMode === "minimized") {
     await minimize(driver);
   }
 

@@ -30,13 +30,13 @@ export const REPO_URL = "https://github.com/kodefess/edge-ts";
 /** Width of rules and profile headers. Kept modest so the layout looks the same on wide terminals. */
 const LAYOUT_WIDTH = 64;
 
-const GUTTER = "[dim]│[/dim]";
+export const GUTTER = "[dim]│[/dim]";
 
 function terminalWidth(): number {
   return process.stdout.columns || 100;
 }
 
-function width(): number {
+export function width(): number {
   return Math.max(30, Math.min(terminalWidth(), LAYOUT_WIDTH));
 }
 
@@ -69,7 +69,7 @@ function truncateAnsi(text: string, max: number): string {
 }
 
 /** console.print(markup, no_wrap=True, overflow="ellipsis") */
-function printLine(markup: string): void {
+export function printLine(markup: string): void {
   activityPause(() => console.print(truncateAnsi(renderMarkup(markup), terminalWidth() - 1)));
 }
 
@@ -202,7 +202,7 @@ export function profileHeader(name: string, index: number, total: number, target
   console.markup(GUTTER);
 }
 
-function counter(number: number, total: number): string {
+export function counter(number: number, total: number): string {
   return `${String(number).padStart(String(total).length)}/${total}`;
 }
 
@@ -296,6 +296,13 @@ function rewardFooter(reward: RewardResult | undefined, indent = "    "): void {
     let line = `${reward.earnDone}/${reward.earnTotal} selesai`;
     if (reward.earnPoints) line += `  [green]+${reward.earnPoints} poin[/green]`;
     console.markup(`${indent}[dim]keep earning[/dim]  ${line}`);
+  }
+
+  // set as wallpaper (+20, part of keep earning)
+  if (reward.wallpaperFound) {
+    let line = reward.wallpaperCompleted ? "[green]✓ selesai[/green]" : "[yellow]belum[/yellow]";
+    if (reward.wallpaperAttempts) line += `  [dim](${reward.wallpaperAttempts} percobaan)[/dim]`;
+    console.markup(`${indent}[dim]wallpaper[/dim]  ${line}`);
   }
 
   if (reward.error) {
@@ -478,10 +485,17 @@ const TABLE_STATUS: Record<ProfileResult["outcome"], string> = {
   interrupted: "[yellow]‼ dihentikan[/yellow]",
 };
 
-type Column = { header: string; align: "left" | "right"; style?: string };
+export type Column = { header: string; align: "left" | "right" | "center"; style?: string };
+
+function align(text: string, visible: number, width: number, mode: Column["align"]): string {
+  const gap = Math.max(0, width - visible);
+  if (mode === "right") return " ".repeat(gap) + text;
+  if (mode === "center") return " ".repeat(Math.floor(gap / 2)) + text + " ".repeat(gap - Math.floor(gap / 2));
+  return text + " ".repeat(gap);
+}
 
 /** Minimal port of rich's Table(box=SIMPLE_HEAD, show_edge=False). */
-function printTable(columns: Column[], rows: string[][], indent = "  "): void {
+export function printTable(columns: Column[], rows: string[][], indent = "  ", footers?: string[]): void {
   const widths = columns.map((column, index) =>
     Math.max(column.header.length, ...rows.map((row) => stripAnsi(renderMarkup(row[index] ?? "")).length)),
   );
@@ -489,15 +503,12 @@ function printTable(columns: Column[], rows: string[][], indent = "  "): void {
   const cell = (text: string, index: number) => {
     const column = columns[index] as Column;
     const rendered = renderMarkup(column.style ? `[${column.style}]${text}[/${column.style}]` : text);
-    const padding = " ".repeat(Math.max(0, (widths[index] ?? 0) - stripAnsi(rendered).length));
-
-    return column.align === "right" ? padding + rendered : rendered + padding;
+    return align(rendered, stripAnsi(rendered).length, widths[index] ?? 0, column.align);
   };
 
   const header = columns
     .map((column, index) => {
-      const padded = column.align === "right" ? column.header.padStart(widths[index] ?? 0) : column.header.padEnd(widths[index] ?? 0);
-      return pc.dim(padded);
+      return pc.dim(align(column.header, column.header.length, widths[index] ?? 0, column.align));
     })
     .join("  ");
 
@@ -507,6 +518,115 @@ function printTable(columns: Column[], rows: string[][], indent = "  "): void {
   for (const row of rows) {
     console.print(`${indent}${row.map(cell).join("  ")}`);
   }
+
+  if (footers) {
+    console.print(`${indent}${pc.dim(widths.map((w) => "─".repeat(w)).join("──"))}`);
+    console.print(`${indent}${footers.map((text, index) => pc.bold(cell(text, index))).join("  ")}`);
+  }
+}
+
+
+const DASH = "[dim]–[/dim]";
+
+/** "3/3" in green when complete, yellow when not, dash when empty. */
+function ratio(done: number, total: number): string {
+  if (!total && !done) return DASH;
+  const color = total && done >= total ? "green" : "yellow";
+  return `[${color}]${done}/${total}[/${color}]`;
+}
+
+function check(completed: boolean, found: boolean): string {
+  if (completed) return "[green]✓[/green]";
+  if (found) return "[red]✗[/red]";
+  return DASH;
+}
+
+function claimCell(rw: RewardResult): string {
+  if (rw.claimPoints) {
+    return `[green]+${rw.claimPoints}[/green]` + (rw.claimLeft ? ` [yellow](${rw.claimLeft})[/yellow]` : "");
+  }
+
+  return rw.claimLeft ? `[red]gagal ${rw.claimLeft}[/red]` : DASH;
+}
+
+/** One aligned row per profile: searches plus reward progress, with a total row. */
+function printRecapTable(results: ProfileResult[], rewardsOn: boolean): void {
+  const active = results.map((r) => r.reward).filter((r): r is RewardResult => Boolean(r?.enabled));
+  const tot = (pick: (r: RewardResult) => number) => active.reduce((sum, r) => sum + pick(r), 0);
+
+  const columns: Column[] = [
+    { header: "#", align: "right", style: "dim" },
+    { header: "Profile", align: "left", style: "bold white" },
+  ];
+  const footers: string[] = ["", rewardsOn ? "total" : ""];
+
+  if (rewardsOn) {
+    columns.push({ header: "Akun", align: "left" });
+    footers.push("");
+  }
+
+  columns.push({ header: "Status", align: "left" }, { header: "Search", align: "right" });
+  footers.push("", `${results.reduce((sum, r) => sum + r.searches, 0)}/${results.reduce((sum, r) => sum + r.target, 0)}`);
+
+  if (rewardsOn) {
+    columns.push(
+      { header: "Daily", align: "center" },
+      { header: "Foto", align: "center" },
+      { header: "Earn", align: "center" },
+      { header: "Wall", align: "center" },
+      { header: "Klaim", align: "right" },
+      { header: "Poin", align: "right" },
+      { header: "Saldo", align: "right", style: "cyan" },
+    );
+    footers.push(
+      `${tot((r) => r.dailyDone)}/${tot((r) => r.dailyTotal)}`,
+      String(active.filter((r) => r.photoCompleted).length),
+      `${tot((r) => r.earnDone)}/${tot((r) => r.earnTotal)}`,
+      String(active.filter((r) => r.wallpaperCompleted).length),
+      `+${tot((r) => r.claimPoints)}`,
+      `[green]+${tot((r) => r.pointsEarned)}[/green]`,
+      "",
+    );
+  }
+
+  columns.push({ header: "Waktu", align: "right", style: "dim" });
+  footers.push("");
+
+  const rows = results.map((r, index) => {
+    const row = [String(index + 1), escape(r.profile)];
+    const rw = r.reward?.enabled ? r.reward : undefined;
+
+    if (rewardsOn) {
+      const account = rw ? (rw.accountName || rw.accountEmail || "").trim() : "";
+      row.push(account ? escape(account.length > 22 ? `${account.slice(0, 21)}…` : account) : DASH);
+    }
+
+    let searches = `${r.searches}/${r.target}`;
+    if (r.failedSearches) searches += ` [red]✗${r.failedSearches}[/red]`;
+    row.push(TABLE_STATUS[r.outcome], searches);
+
+    if (rewardsOn) {
+      if (rw && !rw.signedOut) {
+        const pts = rw.pointsEarned;
+        row.push(
+          ratio(rw.dailyDone, rw.dailyTotal),
+          check(rw.photoCompleted, rw.photoFound),
+          ratio(rw.earnDone, rw.earnTotal),
+          check(rw.wallpaperCompleted, rw.wallpaperFound),
+          claimCell(rw),
+          pts ? `[green]+${pts}[/green]` : "[dim]0[/dim]",
+          rw.pointsEnd !== undefined ? rw.pointsEnd.toLocaleString("en-US").replace(/,/g, ".") : DASH,
+        );
+      } else {
+        row.push(rw ? "[yellow]belum login[/yellow]" : DASH, ...Array<string>(6).fill(DASH));
+      }
+    }
+
+    row.push(formatDuration(r.duration));
+    return row;
+  });
+
+  printTable(columns, rows, "  ", rewardsOn ? footers : undefined);
 }
 
 /** Print the end-of-session recap; returns the imperfect profiles. */
@@ -524,25 +644,10 @@ export function sessionRecap(
 
   section("rekap");
 
+  const rewardsOn = results.some((r) => r.reward?.enabled);
+
   if (results.length) {
-    printTable(
-      [
-        { header: "#", align: "right", style: "dim" },
-        { header: "Profile", align: "left", style: "bold white" },
-        { header: "Status", align: "left" },
-        { header: "Tugas", align: "right" },
-        { header: "Gagal", align: "right" },
-        { header: "Waktu", align: "right", style: "dim" },
-      ],
-      results.map((r, index) => [
-        String(index + 1),
-        escape(r.profile),
-        TABLE_STATUS[r.outcome],
-        `${r.searches}/${r.target}`,
-        r.failedSearches ? `[red]${r.failedSearches}[/red]` : "[dim]0[/dim]",
-        formatDuration(r.duration),
-      ]),
-    );
+    printRecapTable(results, rewardsOn);
     console.print();
   }
 
@@ -554,70 +659,24 @@ export function sessionRecap(
   field("profile", `[bold white]${results.length - imperfect.length}[/bold white]/${totalProfiles} sempurna`);
   field("durasi", formatDuration(duration));
 
-  // --------------------------------------------------------
-  // Rewards totals
-  // --------------------------------------------------------
+  if (rewardsOn) {
+    const rewards = results.map((r) => r.reward).filter((r): r is RewardResult => Boolean(r?.enabled));
+    const totalPoints = rewards.reduce((sum, x) => sum + x.pointsEarned, 0);
+    const totalClaimPts = rewards.reduce((sum, x) => sum + x.claimPoints, 0);
+    const claimed = rewards.filter((x) => x.claims).length;
+    const pending = rewards.filter((x) => x.claimLeft).length;
 
-  const rewards = results.map((r) => r.reward).filter((r): r is RewardResult => Boolean(r?.enabled));
+    let line = `[bold green]+${totalPoints}[/bold green] poin`;
 
-  if (rewards.length) {
-    const sum = (pick: (r: RewardResult) => number) => rewards.reduce((total, r) => total + pick(r), 0);
-
-    const totalClaims = sum((r) => r.claims);
-    const totalClaimPts = sum((r) => r.claimPoints);
-    const totalDailyDone = sum((r) => r.dailyDone);
-    const totalDailyTotal = sum((r) => r.dailyTotal);
-    const totalDailyPts = sum((r) => r.dailyPoints);
-    const totalPhoto = sum((r) => (r.photoCompleted ? 1 : 0));
-    const totalPhotoPts = sum((r) => r.photoPoints);
-    const totalEarnDone = sum((r) => r.earnDone);
-    const totalEarnTotal = sum((r) => r.earnTotal);
-    const totalEarnPts = sum((r) => r.earnPoints);
-    const totalPoints = sum((r) => r.pointsEarned);
-
-    const parts: string[] = [];
-
-    if (totalDailyTotal || totalDailyDone) {
-      parts.push(`daily ${totalDailyDone}/${totalDailyTotal}${totalDailyPts ? ` (+${totalDailyPts})` : ""}`);
-    }
-    if (totalClaims || totalClaimPts) {
-      parts.push(`klaim ${totalClaims}${totalClaimPts ? ` (+${totalClaimPts})` : ""}`);
-    }
-    if (totalPhoto || totalPhotoPts) {
-      parts.push(`foto ${totalPhoto}${totalPhotoPts ? ` (+${totalPhotoPts})` : ""}`);
-    }
-    if (totalEarnTotal || totalEarnDone) {
-      parts.push(`earn ${totalEarnDone}/${totalEarnTotal}${totalEarnPts ? ` (+${totalEarnPts})` : ""}`);
-    }
-    if (totalPoints) {
-      parts.push(`[green]+${totalPoints} poin total[/green]`);
+    if (totalClaimPts || claimed) {
+      line += `   [dim]klaim[/dim] ${claimed} profile (+${totalClaimPts})`;
     }
 
-    if (parts.length) {
-      field("reward", `[bold white]${parts.join("  ·  ")}[/bold white]`);
+    if (pending) {
+      line += `   [yellow]${pending} profile masih tertunda[/yellow]`;
     }
 
-    // per-profile reward summary (email + key stats)
-    console.print();
-    console.markup("  [dim]Reward per profile[/dim]");
-
-    for (const r of results) {
-      const rw = r.reward;
-
-      if (!rw || !rw.enabled) continue;
-
-      const account = (rw.accountEmail || rw.accountName || "-").trim();
-      const ds = `${rw.dailyDone}/${rw.dailyTotal}`;
-      const cl = `${rw.claims}(+${rw.claimPoints})`;
-      const ph = rw.photoCompleted ? "✓" : rw.photoFound ? "✗" : "-";
-      const er = `${rw.earnDone}/${rw.earnTotal}`;
-
-      printLine(
-        `    [bold]${escape(r.profile)}[/bold] [dim]·[/dim] ${escape(account)}` +
-          ` [dim]│ daily[/dim] ${ds} [dim]│ klaim[/dim] ${cl} [dim]│ foto[/dim] ${ph}` +
-          ` [dim]│ earn[/dim] ${er} [dim]│ +poin[/dim] [green]${rw.pointsEarned}[/green]`,
-      );
-    }
+    field("reward", line);
   }
 
   if (skipped) {

@@ -20,8 +20,11 @@ import {
   REWARDS_ENABLED,
   REWARDS_PHOTO_DIR,
   REWARDS_PHOTO_MAX_ATTEMPTS,
+  REWARDS_POINTS_PER_SEARCH,
   REWARDS_TASK_TIMEOUT,
   REWARDS_URL,
+  REWARDS_WALLPAPER_ATTEMPTS,
+  REWARDS_WALLPAPER_TIMEOUT,
 } from "../config/settings";
 import { sleep } from "../utils/delay";
 import { rewardNote } from "../utils/ui";
@@ -50,6 +53,13 @@ export const PHOTO_WORDS = [
 export const QUIZ_URL_WORDS = [
   "quiz", "poll", "challenge", "prediction", "voting", "survei", "survey",
 ] as const;
+
+/**
+ * The Image Creator "Set as wallpaper" task: its title changes every time
+ * ("Deck the walls", ...) but it pays +20 and talks about the wallpaper.
+ */
+export const WALLPAPER_WORDS = ["wallpaper", "image creator"] as const;
+export const WALLPAPER_POINTS = 20;
 
 export const PRERENDER_URL_WORDS = [
   "ntp.msn.com/edge/ntp",
@@ -128,6 +138,15 @@ export class RewardResult {
   earnDone = 0;
   earnPoints = 0;
 
+  // set as wallpaper (/earn, +20)
+  wallpaperFound = false;
+  wallpaperCompleted = false;
+  wallpaperAttempts = 0;
+
+  // PC search points (done, total), e.g. 45/90; undefined when unreadable
+  searchDone?: number = undefined;
+  searchTotal?: number = undefined;
+
   // generic task counter (back-compat for old UI fields)
   tasks = 0;
   notes: string[] = [];
@@ -161,6 +180,12 @@ export class RewardResult {
     }
     if (this.earnTotal || this.earnDone) {
       parts.push(`earn ${this.earnDone}/${this.earnTotal}`);
+    }
+    if (this.wallpaperFound) {
+      parts.push(this.wallpaperCompleted ? "wallpaper ✓" : "wallpaper ✗");
+    }
+    if (this.searchTotal) {
+      parts.push(`search ${this.searchDone}/${this.searchTotal}`);
     }
     if (this.pointsEarned) {
       parts.push(`+${this.pointsEarned} poin`);
@@ -283,6 +308,10 @@ export class RewardsRunner {
         return;
       }
 
+      // One look at the dashboard and /earn decides which steps are left;
+      // finished ones are skipped without being opened again.
+      const todo = await this.snapshot();
+
       // Flow (before the searches). Each step is isolated so one
       // failing task never skips the others.
       const steps: [string, () => Promise<unknown>][] = [
@@ -292,6 +321,9 @@ export class RewardsRunner {
         ["keep earning", () => this.earn()], // 4) /earn tasks
       ];
       for (const [name, step] of steps) {
+        if (!todo.has(name)) {
+          continue;
+        }
         try {
           await step();
         } catch (e) {
@@ -305,6 +337,143 @@ export class RewardsRunner {
     } finally {
       await this.closeTaskTabs();
     }
+  }
+
+  /**
+   * Names of the steps that still have work, from one scan each of the
+   * dashboard and /earn. Also reads the PC search counter.
+   */
+  private async snapshot(): Promise<Set<string>> {
+    const todo = new Set<string>();
+
+    this.setStatus("[dim]reward · cek tugas[/dim]");
+    await this.ensureList("dashboard", true);
+    const dash = await page.scanCards(this.driver);
+
+    await this.readSearch(dash);
+
+    const daily = dash.filter((c) => c.group === "daily" && !this.isPhoto(c));
+
+    if (this.pending(daily).length) {
+      todo.add("daily set");
+    } else {
+      const [done, total] = await this.dailyCategoryProgress(dash);
+      this.result.dailyTotal = total || daily.length;
+      this.result.dailyDone = total ? done : daily.filter((c) => c.completed).length;
+    }
+
+    let perks: page.PerksInfo;
+    try {
+      perks = await page.readPerks(this.driver);
+    } catch {
+      perks = { found: false, total: 0, items: [] };
+    }
+
+    if (perks.found) {
+      const items = perks.items || [];
+      this.result.perksFound = true;
+      this.result.perksTotal = items.length;
+
+      if (items.some((i) => !i.claimed)) {
+        todo.add("your perks");
+      } else {
+        this.result.perksDone = items.length;
+      }
+    }
+
+    await this.ensureList("earn", true);
+    const earnCards = await page.scanCards(this.driver);
+    const earn = earnCards.filter((c) => c.group === "earn" && !this.isPhoto(c));
+
+    if (this.pending(earn).length) {
+      todo.add("keep earning");
+    } else {
+      this.result.earnTotal = earn.length;
+      this.result.earnDone = earn.filter((c) => c.completed).length;
+
+      if (earn.some((c) => this.isWallpaper(c))) {
+        this.result.wallpaperFound = true;
+        this.result.wallpaperCompleted = true;
+      }
+    }
+
+    const photos = [...dash, ...earnCards].filter((c) => this.isPhoto(c));
+
+    if (photos.some((c) => !c.completed && this.actionable(c))) {
+      todo.add("task foto");
+    } else if (photos.length) {
+      this.result.photoCompleted = true;
+    }
+
+    const skipped = ["daily set", "task foto", "keep earning"].filter((name) => !todo.has(name));
+    if (skipped.length) {
+      this.say("sudah selesai · dilewati: " + skipped.join(", "));
+    }
+
+    if (this.result.searchTotal) {
+      this.say(`search · ${this.result.searchDone}/${this.result.searchTotal} poin`);
+    }
+
+    return todo;
+  }
+
+  /** Store the PC search counter (e.g. 45/90). Returns it or null. */
+  private async readSearch(cards?: Card[]): Promise<[number, number] | null> {
+    let progress: [number, number] | null;
+
+    try {
+      progress = await page.readSearchProgress(this.driver, cards);
+    } catch {
+      progress = null;
+    }
+
+    if (progress) {
+      [this.result.searchDone, this.result.searchTotal] = progress;
+    }
+
+    return progress;
+  }
+
+  /**
+   * Searches that still pay, from the last counter read. `fallback`
+   * (SEARCHES_PER_PROFILE) is used when the counter could not be read, so an
+   * unreadable page never stops the searches.
+   */
+  searchesLeft(fallback: number): number {
+    if (!this.result.searchTotal) {
+      return fallback;
+    }
+
+    const left = Math.max(0, this.result.searchTotal - (this.result.searchDone ?? 0));
+
+    // A total of 90 is points (3 per search); a small one is a count.
+    const per = this.result.searchTotal >= 45 ? REWARDS_POINTS_PER_SEARCH : 1;
+
+    return Math.ceil(left / per);
+  }
+
+  /**
+   * Read the search counter again after searching: searches left. Returns 0
+   * when it is full or cannot be read (nothing more to do).
+   */
+  async recheckSearch(): Promise<number> {
+    if (!this.result.opened || this.result.signedOut) {
+      return 0;
+    }
+
+    let progress: [number, number] | null = null;
+
+    try {
+      await this.ensureRewardTab();
+      await this.reloadDashboard();
+      progress = await this.readSearch();
+    } catch (e) {
+      this.fail("cek poin search", e);
+    } finally {
+      await this.focusSearch();
+    }
+
+    return progress ? this.searchesLeft(0) : 0;
   }
 
   /**
@@ -961,6 +1130,21 @@ export class RewardsRunner {
       const key = RewardsRunner.cardKey(card);
       attempts.set(key, (attempts.get(key) ?? 0) + 1);
 
+      if (this.isWallpaper(card)) {
+        // Its own flow with its own retries; once from this loop.
+        attempts.set(key, 2);
+        try {
+          if (await this.wallpaper(card)) {
+            this.result.earnDone += 1;
+            this.result.tasks += 1;
+          }
+        } catch (e) {
+          this.fail("set as wallpaper", e);
+          await this.closeExtras();
+        }
+        continue;
+      }
+
       const title = (card.title || "earn").split("\n")[0]!.slice(0, 60);
       const points = card.points || 0;
       this.say(
@@ -1362,6 +1546,116 @@ export class RewardsRunner {
       }
       await sleep(1200);
     }
+  }
+
+  // --------------------------------------------------------
+  // Set as wallpaper (Image Creator)
+  // --------------------------------------------------------
+
+  private isWallpaper(card: Card): boolean {
+    const text = `${card.title || ""} ${card.label || ""}`.toLowerCase();
+    return WALLPAPER_WORDS.some((word) => text.includes(word)) || card.points === WALLPAPER_POINTS;
+  }
+
+  /**
+   * Open the task, wait for Image Creator, click Set as wallpaper, wait 3 s
+   * on the page it leads to, close it, and check the card on /earn. Repeated
+   * until the card is checked or attempts run out.
+   */
+  private async wallpaper(card: Card): Promise<boolean> {
+    this.result.wallpaperFound = true;
+    const title = (card.title || "wallpaper").split("\n")[0]!.slice(0, 50);
+
+    for (let attempt = 1; attempt <= REWARDS_WALLPAPER_ATTEMPTS; attempt += 1) {
+      this.result.wallpaperAttempts = attempt;
+      this.say(`set as wallpaper · ${title} · percobaan ${attempt}`);
+      this.setStatus(`[dim]reward · wallpaper ${attempt}[/dim]`);
+
+      const beforePts = await page.readPoints(this.driver);
+
+      try {
+        await this.wallpaperAttempt(card);
+      } finally {
+        await this.closeExtras();
+      }
+
+      await this.ensureList("earn", true);
+
+      for (let check = 0; check < 3; check += 1) {
+        const cards = await page.scanCards(this.driver);
+        const state = await this.cardState("earn", card, cards);
+
+        if (state && state.completed) {
+          const gained = await this.pointsDelta(beforePts);
+          this.result.wallpaperCompleted = true;
+          this.result.earnPoints += gained || WALLPAPER_POINTS;
+          this.say("set as wallpaper tercentang");
+          return true;
+        }
+
+        if (check < 2) {
+          await sleep(3000);
+          await this.ensureList("earn", true);
+        }
+      }
+
+      // Scan again so the next attempt clicks a fresh card element.
+      const fresh = await this.cardState("earn", card);
+      if (fresh) {
+        card = fresh;
+      }
+    }
+
+    this.say(`set as wallpaper belum tercentang setelah ${REWARDS_WALLPAPER_ATTEMPTS} percobaan`);
+    return false;
+  }
+
+  private async wallpaperAttempt(card: Card): Promise<boolean> {
+    // Open the task (new tab with Image Creator) without the generic dwell
+    // time: the wait below is for the picture instead.
+    if (!(await this.openCard(card, [0.5, 1.0], true))) {
+      return false;
+    }
+
+    const deadline = Date.now() + REWARDS_WALLPAPER_TIMEOUT * 1000;
+    let button: page.WallpaperButton["element"] = null;
+
+    while (Date.now() < deadline) {
+      const found = await page.findWallpaperButton(this.driver);
+
+      if (found.found && !found.generating) {
+        button = found.element;
+        break;
+      }
+
+      await sleep(2000);
+    }
+
+    if (!button) {
+      this.say("gambar belum muncul · tombol Set as wallpaper tidak ada");
+      return false;
+    }
+
+    // Let the picture settle, then scroll to the button and click it.
+    await sleep(1500);
+    const before = new Set(await this.handles());
+
+    if (!(await page.clickElement(this.driver, button))) {
+      this.say("tombol Set as wallpaper tidak bisa diklik");
+      return false;
+    }
+
+    // It leads to the Bing Wallpaper page (same tab or a new one); the
+    // points are counted once that page is reached.
+    await sleep(1500);
+    const opened = await this.openedHandles(before);
+    if (opened.length) {
+      await this.switch(opened[opened.length - 1]!);
+    }
+
+    await page.waitReady(this.driver, REWARDS_TASK_TIMEOUT);
+    await sleep(3000);
+    return true;
   }
 
   // --------------------------------------------------------

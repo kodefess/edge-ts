@@ -1,6 +1,6 @@
 import { By, Key, until, type WebDriver } from "selenium-webdriver";
 
-import { MAX_CONSECUTIVE_FAILURES, REWARDS_ENABLED, SEARCH_URL } from "../config/settings";
+import { MAX_CONSECUTIVE_FAILURES, REWARDS_ENABLED, REWARDS_SEARCH_TOPUP_ROUNDS, SEARCH_URL } from "../config/settings";
 import { RewardResult, RewardsRunner } from "../rewards";
 import { humanTyping, sleep } from "../utils/delay";
 import { INTERRUPTED, InterruptedError, throwIfInterrupted } from "../utils/interrupt";
@@ -35,7 +35,7 @@ export class ProfileResult {
 
   constructor(
     readonly profile: string,
-    readonly target: number,
+    public target: number,
   ) {}
 
   get failedSearches(): number {
@@ -79,6 +79,7 @@ export async function runSearchesForProfile(
   let searchCount = 0;
   let usedKeywords: string[] = [];
   let consecutiveFailures = 0;
+  let failureLimitReached = false;
 
   const status = new ui.Activity();
 
@@ -112,9 +113,26 @@ export async function runSearchesForProfile(
       await rewards.prepare();
       throwIfInterrupted();
 
+      // Only the searches that still pay: the Rewards page says how many PC
+      // search points are left today (e.g. 45/90 -> 15).
+      const needed = rewards.searchesLeft(maxSearches);
+      const reward = result.reward;
+
+      if (reward.searchTotal && needed <= 0) {
+        ui.profileNote(`poin search sudah penuh (${reward.searchDone}/${reward.searchTotal}) · dilewati`);
+      } else if (reward.searchTotal && needed !== maxSearches) {
+        ui.profileNote(`poin search ${reward.searchDone}/${reward.searchTotal} · ${needed} pencarian lagi`);
+      }
+
+      maxSearches = needed;
+      result.target = needed;
+
       show("[dim]memulai pencarian[/dim]");
     }
 
+    let topups = 0;
+
+    for (;;) {
     while (searchCount < maxSearches) {
       throwIfInterrupted();
 
@@ -182,6 +200,7 @@ export async function runSearchesForProfile(
         ui.searchFailed(attemptNumber, maxSearches, keyword, errorName(error));
 
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          failureLimitReached = true;
           result.stoppedEarly = true;
           ui.profileNote(`berhenti setelah ${consecutiveFailures} gagal berturut-turut`);
           break;
@@ -196,6 +215,31 @@ export async function runSearchesForProfile(
           // Ignore; the next attempt reports the problem.
         }
       }
+    }
+
+    // Check the counter once the searches are done; a search that did not
+    // count leaves it short, so do the missing ones.
+    if (
+      !rewards ||
+      failureLimitReached ||
+      searchCount === 0 ||
+      topups >= REWARDS_SEARCH_TOPUP_ROUNDS
+    ) {
+      break;
+    }
+
+    show("[dim]cek poin search[/dim]", searchCount);
+    const more = await rewards.recheckSearch();
+
+    if (more <= 0) {
+      break;
+    }
+
+    topups += 1;
+    const reward = result.reward as RewardResult;
+    ui.profileNote(`poin search baru ${reward.searchDone}/${reward.searchTotal} · tambah ${more} pencarian`);
+    maxSearches += more;
+    result.target = maxSearches;
     }
 
     // ----------------------------------------------------

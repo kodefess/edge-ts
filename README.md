@@ -76,13 +76,30 @@ A profile is copied into `SELENIUM_USER_DATA_DIR` the first time it is used. Lat
 
 ## Running
 
+Commands are grouped per platform; `just` alone lists them all.
+
+| Group | Commands |
+|---|---|
+| `just web` | `run`, `now`, `at`, `daily`, `preview`, `login` |
+| `just mobile` | `run`, `wifi`, `news`, `inspect`, `setup`, `server`, `web-test`, `web-news` |
+| `just desktop` | `run`, `new`, `save`, `use`, `open`, `close`, `backups`, `restore` (`just desktop` = status) |
+| general | `recap` (all tasks), `setup`, `install`, `keyword`, `update-driver`, `typecheck` |
+
+### Web (PC)
+
 | Command | What it does |
 |---|---|
-| `just run` | Asks how to run: once at a date and time, daily, or now. |
-| `just run 10:00` | Runs once at 10:00 (today, or tomorrow if that time has passed). |
-| `just run-now` | Runs immediately. |
-| `just run-at "2026-11-12 13:00"` | Runs once at that date and time. |
-| `just run-daily "00:01"` | Runs every day at that time and keeps waiting between runs. |
+| `just web run` | Asks how to run: once at a date and time, daily, or now. |
+| `just web run 10:00` | Runs once at 10:00 (today, or tomorrow if that time has passed). |
+| `just web now` | Runs immediately. |
+| `just web at "2026-11-12 13:00"` | Runs once at that date and time. |
+| `just web daily "00:01"` | Runs every day at that time and keeps waiting between runs. |
+| `just web preview ["Profile 5" a@x.com …]` | Opens the profiles in plain Edge windows at Rewards → Redeem and runs no task. |
+| `just web login ["Profile 5" \| a@x.com]` | Opens the Selenium copy of a profile at rewards.bing.com so you can sign in again ("belum login rewards"). Without an argument it lists the profiles and their accounts. |
+
+Add `--visible` to any run command (`just web now --visible`) to show the Edge windows for that run, whatever `EDGE_WINDOW_MODE` says.
+
+Per profile: daily set, photo task, perks, "Keep earning" (including **Set as wallpaper**, +20), searches, then claim ready points. Tasks already checked are skipped. Searches stop at the daily PC search cap (90 points): only the missing ones run, and more are added if the counter is still short. When the counter cannot be read, `SEARCHES_PER_PROFILE` searches run.
 
 Without `just`, use `node node_modules/tsx/dist/cli.mjs src/app.ts` with `--now`, `--at "..."` or `--daily HH:MM`. Add `--no-prompt` to fail instead of asking when no schedule is given. Command-line options take priority over the `SCHEDULE_*` values in `.env`.
 
@@ -107,6 +124,67 @@ For each profile the run starts on `bing.com`, then opens `rewards.bing.com` in 
 Rewards failures never abort the search session. They are shown as `★ reward · …` lines under the profile and summarised in the footer and session recap. If the profile is signed out, the rewards part is skipped with a note. Set `REWARDS_ENABLED=false` to turn the whole feature off.
 
 Selectors are defined in [`src/rewards/page.ts`](src/rewards/page.ts). Microsoft changes the rewards markup from time to time; if tasks stop being detected, update the text fallbacks or the `PHOTO_WORDS` / `NAV_TITLES` lists in [`src/rewards/runner.ts`](src/rewards/runner.ts).
+
+## Mobile (Android phone)
+
+Needs an Android phone with the Bing app signed in to your accounts, Node.js, and `adb`. Read to Earn is only credited inside the Bing app, so this drives the real app through [Appium](https://appium.io) (a small built-in W3C client, no extra npm package).
+
+```bash
+just mobile setup         # once: installs Appium + the uiautomator2 driver
+just mobile run           # every account on the phone
+```
+
+Per account: switch account → **check in** → **More activities** → **read news until Read to Earn is 30/30** → close all tabs. Accounts that fail are retried once at the end. New accounts added to the Bing app are picked up automatically. The Appium server is started (and stopped) by the run itself.
+
+| Option | Effect |
+|---|---|
+| `--list` | show the accounts on the phone |
+| `--accounts "a@x.com,b@x.com"` | only these accounts |
+| `--no-read` | only check in + More activities |
+| `--no-checkin`, `--no-activities` | skip that step |
+| `--count 10` | max articles per round |
+| `--dry-run` | switch accounts, read nothing |
+
+The app's **Daily points cap is 120**; once reached, nothing more is credited that day.
+
+**Phone connection.** USB: plug in and allow USB debugging. Wi-Fi (no cable, PC and phone on the same network): plug in once and run `just mobile wifi usb`, or pair without a cable (Android 11+) with `just mobile wifi pair`. `just mobile wifi` shows the status, `connect` reconnects, `off` disconnects. Switching between home and office Wi-Fi needs no new pairing: the phone is found over mDNS.
+
+Other commands: `just mobile news` (Read to Earn on the active account only), `just mobile inspect` (dump the app screen for selector debugging), `just mobile server` (run Appium by hand), and `just mobile web-test` / `web-news` (Edge with a phone profile through DevTools emulation).
+
+With `MOBILE_BACKEND=appium`, `just web run` also runs the phone pass once at the end of the session.
+
+### Check all accounts
+
+```bash
+just recap
+```
+
+Read-only. Shows per account: check in, Search and Daily set (web tasks), Read to Earn, More activities, daily points and total. Unfinished accounts are listed with a ready `just mobile run --accounts "…"` command.
+
+## Desktop (Microsoft Rewards app for Windows)
+
+The Microsoft Rewards app (from the Microsoft Store) keeps one signed-in account at a time. Each account's sign-in is saved once as a **profile**; `just desktop run` swaps them in one by one and does the weekly desktop-app quest.
+
+```bash
+just desktop new you@example.com    # empties the app and opens it
+#   sign in with that account inside the app
+just desktop save you@example.com   # closes the app and saves the sign-in
+just desktop run                    # every saved profile
+```
+
+**Always add accounts this way.** Signing in to another account directly in the app (without `new` → `save`) leaves the app holding an account that no profile knows; the session is moved to `_backup` (never deleted) and can be turned into a profile with `just desktop restore <email>`.
+
+| Command | Effect |
+|---|---|
+| `just desktop` | app status and saved profiles (▶ = in app) |
+| `just desktop use you@example.com` | put that account in the app and open it |
+| `just desktop run --accounts "a@x,b@x"` | only these profiles |
+| `just desktop run --dry-run` | read the quest status, click nothing |
+| `just desktop run --visible` | keep the app window on screen |
+| `just desktop backups` / `restore NAME` | list backed-up sessions / turn one into a profile |
+| `just desktop open` / `close` | open / close the app |
+
+Saved sign-ins live in `%LOCALAPPDATA%\edge-ts\desktop-profiles` (`DESKTOP_PROFILES_DIR`). They are live sessions: keep them on this PC, never in the repo or a synced folder. For a few seconds while the app starts, the user variable `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` holds `--remote-debugging-port=9333` (no admin needed); it is removed as soon as the app runs, and any leftover is removed by the next `just desktop` command. The port is on 127.0.0.1 only and closes with the app.
 
 ## Updating the driver
 
@@ -157,9 +235,14 @@ src/
   rewards/runner.ts            rewards tab: claims, daily tasks, earn, photos
   rewards/page.ts              rewards selectors and JavaScript helpers
   rewards/photos.ts            picks photos from the local folder
-  scripts/generate-keywords.ts keyword generator
-  scripts/update-driver.ts     downloads the matching msedgedriver
-  utils/ui.ts                  terminal layout (banner, profile blocks, recap)
+  driver/manual.ts             plain Edge window on a profile copy (web login / preview)
+  mobile/                      phone: adb wifi, Appium client, Bing app accounts / news / rewards / recap,
+                               plus Edge phone emulation (devices, emulation, probe, news)
+  desktop/                     Rewards app for Windows: profiles, debug port, quest, offscreen window
+  scripts/                     CLI entry points: login, mobile-*, recap, desktop, generate-keywords, update-driver
+  utils/ui.ts, ui-mobile.ts    terminal layout (banner, profile blocks, recap, phone blocks)
+just/                          web.just, mobile.just, desktop.just
+Justfile                       root commands and the three groups
   utils/keywords.ts            loads keywords.txt
   data/keywords.txt            keywords, one per line
 ```
